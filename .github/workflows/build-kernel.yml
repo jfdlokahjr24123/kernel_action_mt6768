@@ -269,14 +269,14 @@ jobs:
     - name: Build kernel
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        if [ ${{ env.USE_GCC }} = true ]; then
-            if [ ${{ env.USE_GCC_64 }} = true ]; then
+        if [ "${{ env.USE_GCC }}" = "true" ]; then
+            if [ "${{ env.USE_GCC_64 }}" = "true" ]; then
                 export PATH=$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin:$PATH
             fi
-            if [ ${{ env.USE_GCC_32 }} = true ]; then
+            if [ "${{ env.USE_GCC_32 }}" = "true" ]; then
                 export PATH=$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin:$PATH
             fi
-        elif [ ${{ env.USE_CLANG }} = true ]; then
+        elif [ "${{ env.USE_CLANG }}" = "true" ]; then
             export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang/bin:$PATH
         else
             echo "Toolchain not selected"

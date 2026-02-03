@@ -290,6 +290,7 @@ jobs:
         fi
         sed -i 's/CONFIG_VIDEO_MEDIATEK_VCU_WO_FUSE=y/# CONFIG_VIDEO_MEDIATEK_VCU_WO_FUSE is not set/g' arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
         make -j$(nproc --all) CC=clang O=out ARCH=${{ env.KERNEL_ARCH }} ${{ env.EXTRA_CMDS }} ${DEVICE}_defconfig
+        rm -rf drivers/misc/mediatek/vcu
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
             if [ ${{ env.USE_GCC }} = true ]; then
                 make -j$(nproc --all) CC="ccache gcc" O=out ARCH=${{ env.KERNEL_ARCH }} ${{ env.EXTRA_CMDS }}

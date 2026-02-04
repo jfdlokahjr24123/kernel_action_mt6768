@@ -173,7 +173,7 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
         wget -nv -O boot.zip ${{ env.SOURCE_BOOT_IMAGE }}
-        unzip boot.zip -d
+        unzip boot.zip
         mv boot.img boot-source.img
         if [ -f boot-source.img ]; then
             echo "FORMAT_MKBOOTING=$(echo `tools/unpack_bootimg.py --boot_img=boot-source.img --format mkbootimg`)" >> $GITHUB_ENV

@@ -290,7 +290,6 @@ jobs:
         fi
         sed -i 's/obj-$(CONFIG_VIDEO_MEDIATEK_VCU) += .*/obj-$(CONFIG_VIDEO_MEDIATEK_VCODEC) += mtk-vcu.o/' drivers/media/platform/mtk-vcu/Makefile
         make -j$(nproc --all) CC=clang O=out ARCH=${{ env.KERNEL_ARCH }} ${{ env.EXTRA_CMDS }} ${DEVICE}_defconfig
-        rm -rf drivers/misc/mediatek/vcu
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
             if [ ${{ env.USE_GCC }} = true ]; then
                 make -j$(nproc --all) CC="ccache gcc" O=out ARCH=${{ env.KERNEL_ARCH }} ${{ env.EXTRA_CMDS }}

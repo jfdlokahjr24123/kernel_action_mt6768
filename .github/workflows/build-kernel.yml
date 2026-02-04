@@ -211,6 +211,11 @@ jobs:
                 echo "CONFIG_KPROBE_EVENTS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
             fi
         fi
+        echo "CONFIG_PSTORE=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+        echo "CONFIG_PSTORE_CONSOLE=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+        echo "CONFIG_PSTORE_RAM=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+        echo "CONFIG_PSTORE_RAM_SIZE=0x100000" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+
         if [ ${{ env.ADD_OVERLAYFS_CONFIG }} = true ]; then
             echo "CONFIG_OVERLAY_FS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
             echo "CONFIG_OVERLAY_FS_REDIRECT_DIR=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig

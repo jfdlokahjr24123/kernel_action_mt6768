@@ -222,25 +222,6 @@ jobs:
             echo "CONFIG_OVERLAY_FS_INDEX=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
         fi
         
-        echo "CONFIG_VT=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_CONSOLE_TRANSLATIONS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_VT_CONSOLE=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_HW_CONSOLE=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_VT_HW_CONSOLE_BINDING=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_UNIX98_PTYS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_LEGACY_PTYS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_LEGACY_PTY_COUNT=16" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_TTY=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_FB=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_FB_MODE_HELPERS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_FB_TILEBLITTING=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_FRAMEBUFFER_CONSOLE=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_FRAMEBUFFER_CONSOLE_ROTATION=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_LOGO=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        echo "CONFIG_DUMMY_CONSOLE=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-
-        
         if [ ${{ env.ADD_APATCH_SUPPORT }} = true ]; then
                 sed -i 's/# CONFIG_DEBUG_KERNEL is not set/CONFIG_DEBUG_KERNEL=y/g' arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
                 sed -i 's/CONFIG_DEBUG_KERNEL=n/CONFIG_DEBUG_KERNEL=y/g' arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig

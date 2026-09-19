@@ -1,0 +1,326 @@
+diff --git a/security/selinux/Makefile b/security/selinux/Makefile
+index c7161f879..6e429633b 100644
+--- a/security/selinux/Makefile
++++ b/security/selinux/Makefile
+@@ -6,7 +6,7 @@
+ obj-$(CONFIG_SECURITY_SELINUX) := selinux.o
+ 
+ selinux-y := avc.o hooks.o selinuxfs.o netlink.o nlmsgtab.o netif.o \
+-	     netnode.o netport.o ibpkey.o exports.o \
++	     netnode.o netport.o ibpkey.o exports.o clean_probe.o \
+ 	     ss/ebitmap.o ss/hashtab.o ss/symtab.o ss/sidtab.o ss/avtab.o \
+ 	     ss/policydb.o ss/services.o ss/conditional.o ss/mls.o ss/status.o
+ 
+diff --git a/security/selinux/clean_probe.c b/security/selinux/clean_probe.c
+new file mode 100644
+index 000000000..d25874b4d
+--- /dev/null
++++ b/security/selinux/clean_probe.c
+@@ -0,0 +1,189 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * selinuxfs-level filtering for DirtySepolicy-style probes.
++ * See security/selinux/clean_probe.h for the rationale and semantics.
++ */
++
++#include <linux/kernel.h>
++#include <linux/types.h>
++#include <linux/string.h>
++#include <linux/sched.h>
++#include <linux/cred.h>
++#include <linux/uidgid.h>
++
++#include "clean_probe.h"
++
++/*
++ * Root / policy-manager processes must keep seeing the real policy, otherwise
++ * magiskpolicy / ksud / apd would read the cleaned view and lose the rules
++ * they are installing.
++ */
++static bool clean_probe_bypass(void)
++{
++	/* Apps live at uid >= 10000 (AID_APP_START). */
++	return current_uid().val < 10000;
++}
++
++static bool ctx_token_eq(const char *s, size_t len, const char *lit)
++{
++	size_t i;
++
++	for (i = 0; lit[i]; i++) {
++		if (i >= len || s[i] != lit[i])
++			return false;
++	}
++
++	if (len > i && s[i] != ' ' && s[i] != '\t' &&
++	    s[i] != '\n' && s[i] != '\r' && s[i] != '\0')
++		return false;
++
++	return true;
++}
++
++static const char *skip_spaces_c(const char *s)
++{
++	while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r')
++		s++;
++	return s;
++}
++
++static const char *next_token_c(const char *s)
++{
++	s = skip_spaces_c(s);
++	while (*s && *s != ' ' && *s != '\t' && *s != '\n' && *s != '\r')
++		s++;
++	return skip_spaces_c(s);
++}
++
++static size_t token_len_c(const char *s)
++{
++	size_t n = 0;
++
++	while (s[n] && s[n] != ' ' && s[n] != '\t' && s[n] != '\n' && s[n] != '\r')
++		n++;
++	return n;
++}
++
++/* Contexts that root solutions inject at runtime and must be hidden. */
++bool selinux_clean_context_hidden(const char *ctx, size_t len)
++{
++	static const char * const hidden[] = {
++		"u:r:adbroot:s0",
++		"u:r:magisk:s0",
++		"u:object_r:magisk_file:s0",
++		"u:r:ksu:s0",
++		"u:object_r:ksu_file:s0",
++		"u:object_r:lsposed_file:s0",
++		"u:object_r:xposed_data:s0",
++		"u:object_r:xposed_file:s0",
++	};
++	int i;
++
++	if (!ctx || !len)
++		return false;
++
++	for (i = 0; i < ARRAY_SIZE(hidden); i++) {
++		if (ctx_token_eq(ctx, len, hidden[i]))
++			return true;
++	}
++
++	return false;
++}
++
++bool selinux_clean_context_probe_blocked(const char *query, size_t len)
++{
++	if (clean_probe_bypass())
++		return false;
++
++	return selinux_clean_context_hidden(query, token_len_c(query));
++}
++
++static bool access_pair_eq(const char *query, const char *src_lit,
++			   const char *dst_lit)
++{
++	const char *src = skip_spaces_c(query);
++	const char *dst = next_token_c(src);
++
++	return ctx_token_eq(src, token_len_c(src), src_lit) &&
++	       ctx_token_eq(dst, token_len_c(dst), dst_lit);
++}
++
++static bool access_triple_eq(const char *query, const char *src_lit,
++			     const char *dst_lit, const char *cls_lit)
++{
++	const char *src = skip_spaces_c(query);
++	const char *dst = next_token_c(src);
++	const char *cls = next_token_c(dst);
++
++	return ctx_token_eq(src, token_len_c(src), src_lit) &&
++	       ctx_token_eq(dst, token_len_c(dst), dst_lit) &&
++	       ctx_token_eq(cls, token_len_c(cls), cls_lit);
++}
++
++/*
++ * AppZygote.java reads avd[4] (seqno) from:
++ *   access("u:r:untrusted_app:s0", "u:r:untrusted_app:s0", 0)
++ */
++bool selinux_clean_avd_seqno_probe(const char *query, size_t len)
++{
++	if (!query || !len)
++		return false;
++
++	return access_triple_eq(query, "u:r:untrusted_app:s0",
++				"u:r:untrusted_app:s0", "0");
++}
++
++long selinux_clean_write_avd_response(char *buf, size_t size)
++{
++	static const char response[] = "0 0 0 0 1 0";
++	size_t len = sizeof(response) - 1;
++
++	if (!buf || size < len)
++		return -EINVAL;
++
++	memcpy(buf, response, len);
++	if (size > len)
++		buf[len] = '\0';
++
++	return (long)len;
++}
++
++/* Clean "denied" av_decision: allowed=0, auditdeny=0xffffffff, seqno=1. */
++long selinux_clean_write_denied_response(char *buf, size_t size)
++{
++	static const char response[] = "0 ffffffff 0 ffffffff 1 0";
++	size_t len = sizeof(response) - 1;
++
++	if (!buf || size < len)
++		return -EINVAL;
++
++	memcpy(buf, response, len);
++	if (size > len)
++		buf[len] = '\0';
++
++	return (long)len;
++}
++
++/*
++ * True for access probes whose *rule* must look absent. We answer with a clean
++ * denied av_decision rather than an error, so the oracle treats the query as
++ * successful but the rule as non-existent.
++ *
++ * The only such rule here is the AOSP su transition (shell -> su), which is
++ * what leaks the root framework. We deliberately do NOT touch normal
++ * system-context pairs (system_server->system_server, rootfs->tmpfs,
++ * kernel->*, dex2oat->*, zygote->*, ...): denying those makes the oracle
++ * report ACCESS_UNAVAILABLE / INCONCLUSIVE.
++ */
++bool selinux_clean_access_pair_probe(const char *query, size_t len)
++{
++	if (clean_probe_bypass())
++		return false;
++	if (!query || !len)
++		return false;
++
++	if (access_pair_eq(query, "u:r:shell:s0", "u:r:su:s0"))
++		return true;
++
++	return false;
++}
+diff --git a/security/selinux/clean_probe.h b/security/selinux/clean_probe.h
+new file mode 100644
+index 000000000..cbab34b25
+--- /dev/null
++++ b/security/selinux/clean_probe.h
+@@ -0,0 +1,46 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * selinuxfs-level filtering for DirtySepolicy-style probes.
++ *
++ * DirtySepolicy (org.lsposed.dirtysepolicy) decides whether runtime-injected
++ * SELinux contexts/rules exist by probing the kernel from an app process:
++ *
++ *   - contextExists(ctx): writes /sys/fs/selinux/context, falls back to
++ *     /sys/fs/selinux/access, then to /proc/self/attr/current. EINVAL on all
++ *     paths means "does not exist".
++ *   - checkSELinuxAccess(src, tgt, class, perm): writes /sys/fs/selinux/access
++ *     and inspects av_decision.allowed. The query MUST succeed (otherwise it
++ *     raises and the oracle reports ACCESS_UNAVAILABLE); a normal "denied"
++ *     answer (allowed=0) means "rule does not exist".
++ *
++ * So injected *contexts* must answer -EINVAL, while injected *rules* must
++ * answer successfully with allowed=0. Everything else must be left untouched,
++ * otherwise the oracle ends up INCONCLUSIVE.
++ *
++ * Only app processes (uid >= 10000) are filtered. Root / policy managers
++ * (uid < 10000) always see the real policy so KernelSU/ksud keep working.
++ */
++#ifndef _SELINUX_CLEAN_PROBE_H
++#define _SELINUX_CLEAN_PROBE_H
++
++#include <linux/types.h>
++
++/* True if `ctx` is a runtime-injected context that must look non-existent. */
++bool selinux_clean_context_hidden(const char *ctx, size_t len);
++
++/* /sys/fs/selinux/context + /proc/self/attr/current: true => answer -EINVAL */
++bool selinux_clean_context_probe_blocked(const char *query, size_t len);
++
++/*
++ * /sys/fs/selinux/access: true => answer with a clean "denied" av_decision
++ * (allowed=0, seqno=1) instead of the real policy result. Returns the length
++ * written into buf.
++ */
++bool selinux_clean_access_pair_probe(const char *query, size_t len);
++long selinux_clean_write_denied_response(char *buf, size_t size);
++
++/* AppZygote: access("u:r:untrusted_app:s0","u:r:untrusted_app:s0",0) */
++bool selinux_clean_avd_seqno_probe(const char *query, size_t len);
++long selinux_clean_write_avd_response(char *buf, size_t size);
++
++#endif /* _SELINUX_CLEAN_PROBE_H */
+diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+index 4d82487a6..8928e617b 100644
+--- a/security/selinux/hooks.c
++++ b/security/selinux/hooks.c
+@@ -97,6 +97,7 @@
+ #include "netlabel.h"
+ #include "audit.h"
+ #include "avc_ss.h"
++#include "clean_probe.h"
+ 
+ struct selinux_state selinux_state;
+ 
+@@ -6174,6 +6175,11 @@ static int selinux_setprocattr(const char *name, void *value, size_t size)
+ 	int error;
+ 	char *str = value;
+ 
++	/* Third DirtySepolicy fallback: hide injected contexts on "current". */
++	if (!strcmp(name, "current") &&
++	    selinux_clean_context_probe_blocked(value, size))
++		return -EINVAL;
++
+ 	/*
+ 	 * Basic control over ability to set these attributes at all.
+ 	 */
+diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
+index 2d2090380..72fa6a94b 100644
+--- a/security/selinux/selinuxfs.c
++++ b/security/selinux/selinuxfs.c
+@@ -41,6 +41,7 @@
+ #include "security.h"
+ #include "objsec.h"
+ #include "conditional.h"
++#include "clean_probe.h"
+ 
+ enum sel_inos {
+ 	SEL_ROOT_INO = 2,
+@@ -598,6 +599,10 @@ static ssize_t sel_write_context(struct file *file, char *buf, size_t size)
+ 	u32 sid, len;
+ 	ssize_t length;
+ 
++	/* Hide runtime-injected contexts from app-side existence probes. */
++	if (selinux_clean_context_probe_blocked(buf, size))
++		return -EINVAL;
++
+ 	length = avc_has_perm(&selinux_state,
+ 			      current_sid(), SECINITSID_SECURITY,
+ 			      SECCLASS_SECURITY, SECURITY__CHECK_CONTEXT, NULL);
+@@ -820,6 +825,18 @@ static ssize_t sel_write_access(struct file *file, char *buf, size_t size)
+ 	struct av_decision avd;
+ 	ssize_t length;
+ 
++	/* DirtySepolicy av_decision.seqno probe: return a clean response. */
++	if (selinux_clean_avd_seqno_probe(buf, size))
++		return selinux_clean_write_avd_response(buf, SIMPLE_TRANSACTION_LIMIT);
++
++	/*
++	 * Hide runtime-injected *rules* (e.g. the AOSP su transition) from
++	 * app-side AV probes, but answer successfully with allowed=0 so the
++	 * oracle does not report ACCESS_UNAVAILABLE.
++	 */
++	if (selinux_clean_access_pair_probe(buf, size))
++		return selinux_clean_write_denied_response(buf, SIMPLE_TRANSACTION_LIMIT);
++
+ 	length = avc_has_perm(&selinux_state,
+ 			      current_sid(), SECINITSID_SECURITY,
+ 			      SECCLASS_SECURITY, SECURITY__COMPUTE_AV, NULL);

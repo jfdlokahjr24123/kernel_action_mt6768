@@ -210,6 +210,18 @@ jobs:
                 echo "CONFIG_HAVE_KPROBES=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
                 echo "CONFIG_KPROBE_EVENTS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
             fi
+            if grep -q "CONFIG_KSU" arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig; then
+                sed -i 's/# CONFIG_KSU is not set/CONFIG_KSU=y/g' arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+                sed -i 's/CONFIG_KSU=n/CONFIG_KSU=y/g' arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+            else
+                echo "CONFIG_KSU=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+            fi
+            echo "CONFIG_SECURITY_SELINUX=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+            echo "CONFIG_SECCOMP=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+            echo "CONFIG_KSU_TAMPER_SYSCALL_TABLE=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+            echo "CONFIG_KSU_LSM_SECURITY_HOOKS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+            echo "CONFIG_KSU_FEATURE_SULOG=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+            echo "CONFIG_KSU_FEATURE_ADBROOT=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
         fi
         echo "CONFIG_PSTORE=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
         echo "CONFIG_PSTORE_CONSOLE=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig

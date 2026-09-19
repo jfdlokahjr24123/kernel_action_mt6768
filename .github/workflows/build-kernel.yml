@@ -191,6 +191,18 @@ jobs:
             git apply $GITHUB_WORKSPACE/patches/KSU_REVERT.patch
         fi
 
+    - name: Apply DirtySepolicy fix
+      if: env.ENABLE_KERNELSU == 'true' && env.APPLY_DIRTYSEPOLICY_FIX == 'true'
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+        # Hide runtime-injected SELinux contexts/rules (ksu, magisk, adbroot,
+        # the AOSP su transition, ...) from app-side probes so DirtySepolicy
+        # reports a clean policy, without removing any KernelSU functionality.
+        # Only patches security/selinux/ (platform + core sources); the
+        # defconfig / drivers changes are handled by the other steps.
+        git apply $GITHUB_WORKSPACE/patches/dirtysepolicy-fix.patch
+
+
     - name: Setup Configuration for kernel
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel

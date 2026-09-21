@@ -406,7 +406,7 @@ jobs:
         path: kernel_workspace/AnyKernel3/*
 
     - name: Upload kernel image
-      if: env.CHECK_FILE_IS_OK == 'true'
+      if: env.CHECK_FILE_IS_OK == 'false'
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.KERNEL_IMAGE_NAME }}${{ env.LOCALVERSION }}${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}

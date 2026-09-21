@@ -1,39 +1,61 @@
-diff --git a/drivers/md/dm-android-verity.c b/drivers/md/dm-android-verity.c
-index 2b0cc969b..f93bfa5c5 100644
---- a/drivers/md/dm-android-verity.c
-+++ b/drivers/md/dm-android-verity.c
-@@ -118,9 +118,7 @@ static inline bool is_userdebug(void)
+diff --git a/drivers/md/dm-ioctl.c b/drivers/md/dm-ioctl.c
+index ddfea5324..0e97a9ebb 100644
+--- a/drivers/md/dm-ioctl.c
++++ b/drivers/md/dm-ioctl.c
+@@ -1050,10 +1050,10 @@ static int do_resume(struct dm_ioctl *param)
+ 			return PTR_ERR(old_map);
+ 		}
  
- static inline bool is_unlocked(void)
- {
--	static const char unlocked[] = "orange";
--
--	return !strncmp(verifiedbootstate, unlocked, sizeof(unlocked));
-+	return true;
- }
+-		if (dm_table_get_mode(new_map) & FMODE_WRITE)
+-			set_disk_ro(dm_disk(md), 0);
+-		else
+-			set_disk_ro(dm_disk(md), 1);
++		/* Force-rw: never mark dm devices read-only so that
++		 * verity volumes can be remounted rw for debugging.
++		 */
++		set_disk_ro(dm_disk(md), 0);
+ 	}
  
- static int read_block_dev(struct bio_read *payload, struct block_device *bdev,
-@@ -713,6 +711,11 @@ static int android_verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
- 	if (is_eng())
- 		return create_linear_device(ti, dev, target_device);
+ 	if (dm_suspended_md(md)) {
+diff --git a/drivers/md/dm-verity-target.c b/drivers/md/dm-verity-target.c
+index 383249c1a..3a4c849bc 100644
+--- a/drivers/md/dm-verity-target.c
++++ b/drivers/md/dm-verity-target.c
+@@ -705,8 +705,13 @@ int verity_map(struct dm_target *ti, struct bio *bio)
+ 		return DM_MAPIO_KILL;
+ 	}
  
-+	if (is_unlocked()) {
-+		DMINFO("Device unlocked, bypassing verity - using linear target");
-+		return create_linear_device(ti, dev, target_device);
+-	if (bio_data_dir(bio) == WRITE)
+-		return DM_MAPIO_KILL;
++	if (bio_data_dir(bio) == WRITE) {
++		/* Force-rw: pass writes straight to the data device
++		 * without hash verification (bio already remapped above).
++		 */
++		generic_make_request(bio);
++		return DM_MAPIO_SUBMITTED;
 +	}
-+
- 	strreplace(key_id, '#', ' ');
  
- 	DMINFO("key:%s dev:%s", key_id, target_device);
-@@ -726,11 +729,6 @@ static int android_verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
- 	err = extract_metadata(dev, &fec, &metadata, &verity_enabled);
+ 	io = dm_per_bio_data(bio, ti->per_io_data_size);
+ 	io->v = v;
+@@ -1005,12 +1010,6 @@ int verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
+ 	if (r)
+ 		goto bad;
  
- 	if (err) {
--		/* Allow invalid metadata when the device is unlocked */
--		if (is_unlocked()) {
--			DMWARN("Allow invalid metadata when unlocked");
--			return create_linear_device(ti, dev, target_device);
--		}
- 		DMERR("Error while extracting metadata");
- 		handle_error();
- 		return err;
+-	if ((dm_table_get_mode(ti->table) & ~FMODE_READ)) {
+-		ti->error = "Device must be readonly";
+-		r = -EINVAL;
+-		goto bad;
+-	}
+-
+ 	if (argc < 10) {
+ 		ti->error = "Not enough arguments";
+ 		r = -EINVAL;
+@@ -1025,7 +1024,7 @@ int verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
+ 	}
+ 	v->version = num;
+ 
+-	r = dm_get_device(ti, argv[1], FMODE_READ, &v->data_dev);
++	r = dm_get_device(ti, argv[1], FMODE_READ | FMODE_WRITE, &v->data_dev);
+ 	if (r) {
+ 		ti->error = "Data device lookup failed";
+ 		goto bad;

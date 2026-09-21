@@ -1,0 +1,30 @@
+diff --git a/drivers/md/dm-android-verity.c b/drivers/md/dm-android-verity.c
+index 2b0cc969b..760b5e8c7 100644
+--- a/drivers/md/dm-android-verity.c
++++ b/drivers/md/dm-android-verity.c
+@@ -118,9 +118,7 @@ static inline bool is_userdebug(void)
+ 
+ static inline bool is_unlocked(void)
+ {
+-	static const char unlocked[] = "orange";
+-
+-	return !strncmp(verifiedbootstate, unlocked, sizeof(unlocked));
++	return true;
+ }
+ 
+ static int read_block_dev(struct bio_read *payload, struct block_device *bdev,
+diff --git a/drivers/misc/mediatek/masp/asfv2/module/sec_mod.c b/drivers/misc/mediatek/masp/asfv2/module/sec_mod.c
+index 3baa7dee9..75a5378df 100644
+--- a/drivers/misc/mediatek/masp/asfv2/module/sec_mod.c
++++ b/drivers/misc/mediatek/masp/asfv2/module/sec_mod.c
+@@ -322,8 +322,8 @@ static int __init masp_parse_dt(unsigned long node,
+ 		g_rom_info_sbc_attr = tags->rom_info_sbc_attr;
+ 		g_rom_info_sdl_attr = tags->rom_info_sdl_attr;
+ 		g_hw_sbcen = tags->hw_sbcen;
+-		g_lock_state = tags->lock_state;
+-		lks = tags->lock_state;
++		g_lock_state = 0;
++		lks = 0;
+ 		for (i = 0; i < NUM_RID; i++)
+ 			g_random_id[i] = tags->rid[i];
+ 		for (i = 0; i < NUM_CRYPTO_SEED; i++)

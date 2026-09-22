@@ -1,61 +1,36 @@
-diff --git a/drivers/md/dm-ioctl.c b/drivers/md/dm-ioctl.c
-index ddfea5324..0e97a9ebb 100644
---- a/drivers/md/dm-ioctl.c
-+++ b/drivers/md/dm-ioctl.c
-@@ -1050,10 +1050,10 @@ static int do_resume(struct dm_ioctl *param)
- 			return PTR_ERR(old_map);
- 		}
+diff --git a/block/genhd.c b/block/genhd.c
+index 3958ae39d..b567aaca2 100644
+--- a/block/genhd.c
++++ b/block/genhd.c
+@@ -1469,6 +1469,15 @@ static void set_disk_ro_uevent(struct gendisk *gd, int ro)
  
--		if (dm_table_get_mode(new_map) & FMODE_WRITE)
--			set_disk_ro(dm_disk(md), 0);
--		else
--			set_disk_ro(dm_disk(md), 1);
-+		/* Force-rw: never mark dm devices read-only so that
-+		 * verity volumes can be remounted rw for debugging.
-+		 */
-+		set_disk_ro(dm_disk(md), 0);
- 	}
+ void set_device_ro(struct block_device *bdev, int flag)
+ {
++	/* Force-rw: same as set_disk_ro(), userspace BLKROSET must not be
++	 * able to lock down a device-mapper device.
++	 */
++	if (bdev && bdev->bd_disk &&
++	    bdev->bd_disk->disk_name[0] == 'd' &&
++	    bdev->bd_disk->disk_name[1] == 'm' &&
++	    bdev->bd_disk->disk_name[2] == '-')
++		flag = 0;
++
+ 	bdev->bd_part->policy = flag;
+ }
  
- 	if (dm_suspended_md(md)) {
-diff --git a/drivers/md/dm-verity-target.c b/drivers/md/dm-verity-target.c
-index 383249c1a..3a4c849bc 100644
---- a/drivers/md/dm-verity-target.c
-+++ b/drivers/md/dm-verity-target.c
-@@ -705,8 +705,13 @@ int verity_map(struct dm_target *ti, struct bio *bio)
- 		return DM_MAPIO_KILL;
- 	}
+@@ -1479,6 +1488,15 @@ void set_disk_ro(struct gendisk *disk, int flag)
+ 	struct disk_part_iter piter;
+ 	struct hd_struct *part;
  
--	if (bio_data_dir(bio) == WRITE)
--		return DM_MAPIO_KILL;
-+	if (bio_data_dir(bio) == WRITE) {
-+		/* Force-rw: pass writes straight to the data device
-+		 * without hash verification (bio already remapped above).
-+		 */
-+		generic_make_request(bio);
-+		return DM_MAPIO_SUBMITTED;
-+	}
- 
- 	io = dm_per_bio_data(bio, ti->per_io_data_size);
- 	io->v = v;
-@@ -1005,12 +1010,6 @@ int verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
- 	if (r)
- 		goto bad;
- 
--	if ((dm_table_get_mode(ti->table) & ~FMODE_READ)) {
--		ti->error = "Device must be readonly";
--		r = -EINVAL;
--		goto bad;
--	}
--
- 	if (argc < 10) {
- 		ti->error = "Not enough arguments";
- 		r = -EINVAL;
-@@ -1025,7 +1024,7 @@ int verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
- 	}
- 	v->version = num;
- 
--	r = dm_get_device(ti, argv[1], FMODE_READ, &v->data_dev);
-+	r = dm_get_device(ti, argv[1], FMODE_READ | FMODE_WRITE, &v->data_dev);
- 	if (r) {
- 		ti->error = "Data device lookup failed";
- 		goto bad;
++	/*
++	 * Force-rw: never let device-mapper devices be marked read-only so
++	 * that mappable/verity volumes can be remounted rw for debugging.
++	 * This catches every path that would otherwise set the dm disk ro.
++	 */
++	if (disk->disk_name[0] == 'd' && disk->disk_name[1] == 'm' &&
++	    disk->disk_name[2] == '-')
++		flag = 0;
++
+ 	if (disk->part0.policy != flag) {
+ 		set_disk_ro_uevent(disk, flag);
+ 		disk->part0.policy = flag;

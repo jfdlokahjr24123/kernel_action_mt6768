@@ -196,8 +196,8 @@ jobs:
         if [ "${{ env.ENABLE_KERNELSU }}" = "true" ] && [ "${{ env.APPLY_DIRTYSEPOLICY_FIX }}" = "true" ]; then
           git apply $GITHUB_WORKSPACE/patches/dirtysepolicy-fix.patch
         fi
-        if [ "${{ env.APPLY_FORCE_DM_RW_FIX }}" = "true" ]; then
-          git apply $GITHUB_WORKSPACE/patches/force_dm_rw.patch
+        if [ "${{ env.APPLY_DM_FIX }}" = "true" ]; then
+          git apply $GITHUB_WORKSPACE/patches/dm_fix.patch
         fi
 
     - name: Setup Configuration for kernel

@@ -197,7 +197,7 @@ jobs:
           git apply $GITHUB_WORKSPACE/patches/dirtysepolicy-fix.patch
         fi
         if [ "${{ env.APPLY_DM_FIX }}" = "true" ]; then
-          git apply $GITHUB_WORKSPACE/patches/dm_fix.patch
+          git apply $GITHUB_WORKSPACE/patches/dm-fix.patch
         fi
 
     - name: Setup Configuration for kernel

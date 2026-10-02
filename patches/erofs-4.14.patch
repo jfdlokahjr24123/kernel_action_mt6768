@@ -1731,10 +1731,10 @@ index 000000000..3350ab65d
 +
 diff --git a/fs/erofs/internal.h b/fs/erofs/internal.h
 new file mode 100644
-index 000000000..d10ca0480
+index 000000000..8a724510c
 --- /dev/null
 +++ b/fs/erofs/internal.h
-@@ -0,0 +1,502 @@
+@@ -0,0 +1,505 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +/*
 + * Copyright (C) 2017-2018 HUAWEI, Inc.
@@ -1769,9 +1769,12 @@ index 000000000..d10ca0480
 +	smp_cond_load_acquire(&(v)->counter, (c))
 +#endif
 +
++/* 4.14's read_cache_page() dereferences filler unconditionally; mimic
++ * read_mapping_page() semantics via read_cache_page_gfp() instead.
++ */
 +#ifndef read_mapping_page
 +#define read_mapping_page(mapping, index, data) \
-+	read_cache_page(mapping, index, NULL, data)
++	read_cache_page_gfp(mapping, index, mapping_gfp_mask(mapping))
 +#endif
 +
 +#ifndef readahead_gfp_mask

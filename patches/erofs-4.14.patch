@@ -1731,10 +1731,10 @@ index 000000000..3350ab65d
 +
 diff --git a/fs/erofs/internal.h b/fs/erofs/internal.h
 new file mode 100644
-index 000000000..05ea7fb5c
+index 000000000..d10ca0480
 --- /dev/null
 +++ b/fs/erofs/internal.h
-@@ -0,0 +1,498 @@
+@@ -0,0 +1,502 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +/*
 + * Copyright (C) 2017-2018 HUAWEI, Inc.
@@ -1760,6 +1760,10 @@ index 000000000..05ea7fb5c
 +/*
 + * compatibility shims for the v5.4 EROFS backport on Linux 4.14
 + */
++#ifndef lru_to_page
++#define lru_to_page(entry) list_entry(entry, struct page, lru)
++#endif
++
 +#ifndef atomic_cond_read_relaxed
 +#define atomic_cond_read_relaxed(v, c) \
 +	smp_cond_load_acquire(&(v)->counter, (c))

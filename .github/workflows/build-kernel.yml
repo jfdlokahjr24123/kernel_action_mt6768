@@ -196,9 +196,10 @@ jobs:
         if [ "${{ env.ENABLE_KERNELSU }}" = "true" ] && [ "${{ env.APPLY_DIRTYSEPOLICY_FIX }}" = "true" ]; then
           git apply $GITHUB_WORKSPACE/patches/dirtysepolicy-fix.patch
         fi
-        if [ "${{ env.APPLY_DM_FIX }}" = "true" ]; then
-          git apply $GITHUB_WORKSPACE/patches/dm-fix.patch
-        fi
+        #if [ "${{ env.APPLY_DM_FIX }}" = "true" ]; then
+        #  git apply $GITHUB_WORKSPACE/patches/dm-fix.patch
+        #fi
+        git apply $GITHUB_WORKSPACE/patches/erofs-4.14.patch
 
     - name: Setup Configuration for kernel
       run: |

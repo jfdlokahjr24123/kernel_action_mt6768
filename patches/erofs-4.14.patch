@@ -2493,10 +2493,10 @@ index 000000000..3abbecbf7
 +
 diff --git a/fs/erofs/super.c b/fs/erofs/super.c
 new file mode 100644
-index 000000000..47b23bf76
+index 000000000..cd764356e
 --- /dev/null
 +++ b/fs/erofs/super.c
-@@ -0,0 +1,616 @@
+@@ -0,0 +1,629 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Copyright (C) 2017-2018 HUAWEI, Inc.
@@ -3097,10 +3097,23 @@ index 000000000..47b23bf76
 +	return err;
 +}
 +
++/* 4.14 has no .free_inode; delay slab free via RCU as 4.19-era erofs did */
++static void erofs_i_callback(struct rcu_head *head)
++{
++	struct inode *inode = container_of(head, struct inode, i_rcu);
++
++	erofs_free_inode(inode);
++}
++
++static void erofs_destroy_inode(struct inode *inode)
++{
++	call_rcu(&inode->i_rcu, erofs_i_callback);
++}
++
 +const struct super_operations erofs_sops = {
 +	.put_super = erofs_put_super,
 +	.alloc_inode = erofs_alloc_inode,
-+	.free_inode = erofs_free_inode,
++	.destroy_inode = erofs_destroy_inode,
 +	.statfs = erofs_statfs,
 +	.show_options = erofs_show_options,
 +	.remount_fs = erofs_remount,

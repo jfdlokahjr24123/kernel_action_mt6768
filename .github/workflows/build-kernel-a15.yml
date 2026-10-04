@@ -194,16 +194,9 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         if [ "${{ env.ENABLE_KERNELSU }}" = "true" ] && [ "${{ env.APPLY_DIRTYSEPOLICY_FIX }}" = "true" ]; then
-          git apply $GITHUB_WORKSPACE/patches/dirtysepolicy-fix.patch
+          git apply $GITHUB_WORKSPACE/patches/dirtysepolicy-fix-a15.patch
         fi
-        #echo "CONFIG_F2FS_FS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        #echo "CONFIG_F2FS_FS_XATTR=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        #echo "CONFIG_F2FS_FS_POSIX_ACL=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        #echo "CONFIG_F2FS_FS_SECURITY=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        #echo "CONFIG_F2FS_CHECK_FS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        #echo "CONFIG_F2FS_FS_ENCRYPTION=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        #echo "CONFIG_F2FS_FS_COMPRESSION=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        #sed -i 's/# CONFIG_DM_DEFAULT_KEY is not set/CONFIG_DM_DEFAULT_KEY=y/g' arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+        git apply $GITHUB_WORKSPACE/patches/set_version-touch_flag-a15.patch
 
     - name: Setup Configuration for kernel
       run: |

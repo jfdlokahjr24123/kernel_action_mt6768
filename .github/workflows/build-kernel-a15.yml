@@ -197,6 +197,7 @@ jobs:
           git apply $GITHUB_WORKSPACE/patches/dirtysepolicy-fix-a15.patch
         fi
         git apply $GITHUB_WORKSPACE/patches/set_version-touch_flag-a15.patch
+        git apply $GITHUB_WORKSPACE/patches/erofs-4.14-a15.patch
 
     - name: Setup Configuration for kernel
       run: |
@@ -267,6 +268,8 @@ jobs:
             sed -i 's/CONFIG_THINLTO=y/CONFIG_THINLTO=n/' arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
             echo "CONFIG_LTO_NONE=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
         fi
+        sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/' arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+        echo "CONFIG_CC_STACKPROTECTOR_NONE=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
         if [ ${{ env.DISABLE_CC_WERROR }} = true ]; then
             echo "CONFIG_CC_WERROR=n" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
         fi

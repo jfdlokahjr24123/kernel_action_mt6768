@@ -197,6 +197,7 @@ jobs:
           git apply $GITHUB_WORKSPACE/patches/dirtysepolicy-fix.patch
         fi
         git apply $GITHUB_WORKSPACE/patches/set_version-touch_flag.patch
+        git apply $GITHUB_WORKSPACE/patches/mtk-vcu-fix.patch
 
     - name: Setup Configuration for kernel
       run: |

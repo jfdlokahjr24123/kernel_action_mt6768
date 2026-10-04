@@ -194,9 +194,9 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         if [ "${{ env.ENABLE_KERNELSU }}" = "true" ] && [ "${{ env.APPLY_DIRTYSEPOLICY_FIX }}" = "true" ]; then
-          git apply $GITHUB_WORKSPACE/patches/dirtysepolicy-fix.patch
+          git apply $GITHUB_WORKSPACE/patches/dirtysepolicy-fix-a15.patch
         fi
-        git apply $GITHUB_WORKSPACE/patches/set_version-touch_flag.patch
+        git apply $GITHUB_WORKSPACE/patches/set_version-touch_flag-a15.patch
 
     - name: Setup Configuration for kernel
       run: |

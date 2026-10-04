@@ -1,13 +1,13 @@
 diff --git a/security/selinux/Makefile b/security/selinux/Makefile
-index b8798cd58..900ba101c 100644
+index bcbb2b077..9b320f583 100644
 --- a/security/selinux/Makefile
 +++ b/security/selinux/Makefile
 @@ -6,7 +6,7 @@
  obj-$(CONFIG_SECURITY_SELINUX) := selinux.o
  
  selinux-y := avc.o hooks.o selinuxfs.o netlink.o nlmsgtab.o netif.o \
--	     netnode.o netport.o ibpkey.o \
-+	     netnode.o netport.o ibpkey.o clean_probe.o \
+-	     netnode.o netport.o ibpkey.o exports.o \
++	     netnode.o netport.o ibpkey.o exports.o clean_probe.o \
  	     ss/ebitmap.o ss/hashtab.o ss/symtab.o ss/sidtab.o ss/avtab.o \
  	     ss/policydb.o ss/services.o ss/conditional.o ss/mls.o ss/status.o
  
@@ -259,18 +259,18 @@ index 000000000..cbab34b25
 +
 +#endif /* _SELINUX_CLEAN_PROBE_H */
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index 814c64fc9..74de75ddc 100644
+index 060943e6d..5990ceda8 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
-@@ -102,6 +102,7 @@
+@@ -97,6 +97,7 @@
  #include "netlabel.h"
  #include "audit.h"
  #include "avc_ss.h"
 +#include "clean_probe.h"
  
- struct selinux_state selinux_state;
- 
-@@ -6314,6 +6315,11 @@ static int selinux_setprocattr(const char *name, void *value, size_t size)
+ /* SECMARK reference count */
+ static atomic_t selinux_secmark_refcount = ATOMIC_INIT(0);
+@@ -6031,6 +6032,11 @@ static int selinux_setprocattr(const char *name, void *value, size_t size)
  	int error;
  	char *str = value;
  
@@ -283,18 +283,18 @@ index 814c64fc9..74de75ddc 100644
  	 * Basic control over ability to set these attributes at all.
  	 */
 diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
-index d93fd1a98..31e83b6fb 100644
+index 00eed842c..000ceb74b 100644
 --- a/security/selinux/selinuxfs.c
 +++ b/security/selinux/selinuxfs.c
-@@ -42,6 +42,7 @@
+@@ -40,6 +40,7 @@
  #include "security.h"
  #include "objsec.h"
  #include "conditional.h"
 +#include "clean_probe.h"
  
- enum sel_inos {
- 	SEL_ROOT_INO = 2,
-@@ -608,6 +609,10 @@ static ssize_t sel_write_context(struct file *file, char *buf, size_t size)
+ unsigned int selinux_checkreqprot = CONFIG_SECURITY_SELINUX_CHECKREQPROT_VALUE;
+ 
+@@ -548,6 +549,10 @@ static ssize_t sel_write_context(struct file *file, char *buf, size_t size)
  	u32 sid, len;
  	ssize_t length;
  
@@ -302,10 +302,10 @@ index d93fd1a98..31e83b6fb 100644
 +	if (selinux_clean_context_probe_blocked(buf, size))
 +		return -EINVAL;
 +
- 	length = avc_has_perm(&selinux_state,
- 			      current_sid(), SECINITSID_SECURITY,
+ 	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
  			      SECCLASS_SECURITY, SECURITY__CHECK_CONTEXT, NULL);
-@@ -830,6 +835,18 @@ static ssize_t sel_write_access(struct file *file, char *buf, size_t size)
+ 	if (length)
+@@ -761,6 +766,18 @@ static ssize_t sel_write_access(struct file *file, char *buf, size_t size)
  	struct av_decision avd;
  	ssize_t length;
  
@@ -321,6 +321,6 @@ index d93fd1a98..31e83b6fb 100644
 +	if (selinux_clean_access_pair_probe(buf, size))
 +		return selinux_clean_write_denied_response(buf, SIMPLE_TRANSACTION_LIMIT);
 +
- 	length = avc_has_perm(&selinux_state,
- 			      current_sid(), SECINITSID_SECURITY,
+ 	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
  			      SECCLASS_SECURITY, SECURITY__COMPUTE_AV, NULL);
+ 	if (length)

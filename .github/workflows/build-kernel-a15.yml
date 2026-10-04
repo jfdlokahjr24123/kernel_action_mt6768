@@ -34,7 +34,7 @@ jobs:
 
     - name: Prepare environment
       run: |
-        grep -v -E "^#|^\n" config.env | sed 's/ #.*//; s/#.*//' >> $GITHUB_ENV
+        grep -v -E "^#|^\n" config-a15.env | sed 's/ #.*//; s/#.*//' >> $GITHUB_ENV
 
     - name: Set swap to 10G
       uses: pierotofy/set-swap-space@master

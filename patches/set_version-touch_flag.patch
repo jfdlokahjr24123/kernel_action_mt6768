@@ -187,6 +187,19 @@ index c70e1d29d..bbb83056a 100644
  #endif
  
  #if NVT_TOUCH_ESD_PROTECT
+diff --git a/include/linux/printk.h b/include/linux/printk.h
+index 49f96743c..9b87fc332 100644
+--- a/include/linux/printk.h
++++ b/include/linux/printk.h
+@@ -8,7 +8,7 @@
+ #include <linux/linkage.h>
+ #include <linux/cache.h>
+ 
+-extern const char linux_banner[];
++extern char linux_banner[512];
+ extern const char linux_proc_banner[];
+ 
+ #define PRINTK_MAX_SINGLE_HEADER_LEN 2
 diff --git a/init/version.c b/init/version.c
 index 5606341e9..811f8d180 100644
 --- a/init/version.c

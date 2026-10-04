@@ -200,6 +200,13 @@ jobs:
         #  git apply $GITHUB_WORKSPACE/patches/dm-fix.patch
         #fi
         git apply $GITHUB_WORKSPACE/patches/erofs-4.14.patch
+        echo "CONFIG_F2FS_FS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+        echo "CONFIG_F2FS_FS_XATTR=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+        echo "CONFIG_F2FS_FS_POSIX_ACL=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+        echo "CONFIG_F2FS_FS_SECURITY=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+        echo "CONFIG_F2FS_CHECK_FS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+        echo "CONFIG_F2FS_FS_ENCRYPTION=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+        echo "CONFIG_F2FS_FS_COMPRESSION=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
 
     - name: Setup Configuration for kernel
       run: |

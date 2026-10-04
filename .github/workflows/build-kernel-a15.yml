@@ -197,6 +197,7 @@ jobs:
           git apply $GITHUB_WORKSPACE/patches/dirtysepolicy-fix-a15.patch
         fi
         git apply $GITHUB_WORKSPACE/patches/set_version-touch_flag-a15.patch
+        git apply $GITHUB_WORKSPACE/patches/llvm-ias-a15.patch
         git apply $GITHUB_WORKSPACE/patches/erofs-4.14-a15.patch
 
     - name: Setup Configuration for kernel

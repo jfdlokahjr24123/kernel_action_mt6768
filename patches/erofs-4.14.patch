@@ -1,3 +1,14 @@
+diff --git a/arch/arm64/configs/lancelot_defconfig b/arch/arm64/configs/lancelot_defconfig
+index a45a1ed5a..fb55ca0e3 100644
+--- a/arch/arm64/configs/lancelot_defconfig
++++ b/arch/arm64/configs/lancelot_defconfig
+@@ -440,3 +440,6 @@ CONFIG_LEDS_TRIGGER_BACKLIGHT=y
+ CONFIG_BT=y
+ CONFIG_WLAN_DRV_BUILD_IN=y
+ # CONFIG_PRINTK_MT_PREFIX is not set
++CONFIG_EROFS_FS=y
++CONFIG_EROFS_FS_ZIP=y
++CONFIG_EROFS_FS_CLUSTER_PAGE_LIMIT=16
 diff --git a/fs/Kconfig b/fs/Kconfig
 index 83d8bf551..a2b8cb0c2 100644
 --- a/fs/Kconfig
@@ -138,10 +149,10 @@ index 000000000..46f2aa4ba
 +
 diff --git a/fs/erofs/compress.h b/fs/erofs/compress.h
 new file mode 100644
-index 000000000..07d279fd5
+index 000000000..b15c3a75d
 --- /dev/null
 +++ b/fs/erofs/compress.h
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,58 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +/*
 + * Copyright (C) 2019 HUAWEI, Inc.
@@ -186,14 +197,12 @@ index 000000000..07d279fd5
 +static inline bool z_erofs_put_stagingpage(struct list_head *pagepool,
 +					   struct page *page)
 +{
++	(void)pagepool;
 +	if (!z_erofs_page_is_staging(page))
 +		return false;
 +
 +	/* staging pages should not be used by others at the same time */
-+	if (page_ref_count(page) > 1)
-+		put_page(page);
-+	else
-+		list_add(&page->lru, pagepool);
++	put_page(page);
 +	return true;
 +}
 +
@@ -204,10 +213,10 @@ index 000000000..07d279fd5
 +
 diff --git a/fs/erofs/data.c b/fs/erofs/data.c
 new file mode 100644
-index 000000000..5d744d452
+index 000000000..969992e8f
 --- /dev/null
 +++ b/fs/erofs/data.c
-@@ -0,0 +1,364 @@
+@@ -0,0 +1,352 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Copyright (C) 2017-2018 HUAWEI, Inc.
@@ -533,27 +542,12 @@ index 000000000..5d744d452
 +	return 0;
 +}
 +
-+static int erofs_get_block(struct inode *inode, sector_t iblock,
-+			   struct buffer_head *bh, int create)
-+{
-+	struct erofs_map_blocks map = {
-+		.m_la = iblock << 9,
-+	};
-+	int err;
-+
-+	err = erofs_map_blocks(inode, &map, EROFS_GET_BLOCKS_RAW);
-+	if (err)
-+		return err;
-+
-+	if (map.m_flags & EROFS_MAP_MAPPED)
-+		bh->b_blocknr = erofs_blknr(map.m_pa);
-+
-+	return err;
-+}
-+
 +static sector_t erofs_bmap(struct address_space *mapping, sector_t block)
 +{
 +	struct inode *inode = mapping->host;
++	struct erofs_map_blocks map = {
++		.m_la = blknr_to_addr(block),
++	};
 +
 +	if (EROFS_I(inode)->datalayout == EROFS_INODE_FLAT_INLINE) {
 +		erofs_blk_t blks = i_size_read(inode) >> LOG_BLOCK_SIZE;
@@ -562,7 +556,10 @@ index 000000000..5d744d452
 +			return 0;
 +	}
 +
-+	return generic_block_bmap(mapping, block, erofs_get_block);
++	if (!erofs_map_blocks(inode, &map, EROFS_GET_BLOCKS_RAW))
++		return erofs_blknr(map.m_pa);
++
++	return 0;
 +}
 +
 +/* for uncompressed (aligned) files and raw access for other files */
@@ -574,10 +571,10 @@ index 000000000..5d744d452
 +
 diff --git a/fs/erofs/decompressor.c b/fs/erofs/decompressor.c
 new file mode 100644
-index 000000000..19f89f9fb
+index 000000000..d06a3b77f
 --- /dev/null
 +++ b/fs/erofs/decompressor.c
-@@ -0,0 +1,338 @@
+@@ -0,0 +1,344 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Copyright (C) 2019 HUAWEI, Inc.
@@ -604,7 +601,8 @@ index 000000000..19f89f9fb
 +	 */
 +	int (*prepare_destpages)(struct z_erofs_decompress_req *rq,
 +				 struct list_head *pagepool);
-+	int (*decompress)(struct z_erofs_decompress_req *rq, u8 *out);
++	int (*decompress)(struct z_erofs_decompress_req *rq, u8 *out,
++			  u8 *obase);
 +	char *name;
 +};
 +
@@ -636,14 +634,18 @@ index 000000000..19f89f9fb
 +
 +		if (page) {
 +			__clear_bit(j, bounced);
-+			if (kaddr) {
-+				if (kaddr + PAGE_SIZE == page_address(page))
++			if (!PageHighMem(page)) {
++				if (!i) {
++					kaddr = page_address(page);
++					continue;
++				}
++				if (kaddr &&
++				    kaddr + PAGE_SIZE == page_address(page)) {
 +					kaddr += PAGE_SIZE;
-+				else
-+					kaddr = NULL;
-+			} else if (!i) {
-+				kaddr = page_address(page);
++					continue;
++				}
 +			}
++			kaddr = NULL;
 +			continue;
 +		}
 +		kaddr = NULL;
@@ -690,10 +692,13 @@ index 000000000..19f89f9fb
 +	return tmp;
 +}
 +
-+static int z_erofs_lz4_decompress(struct z_erofs_decompress_req *rq, u8 *out)
++static int z_erofs_lz4_decompress(struct z_erofs_decompress_req *rq, u8 *out,
++				  u8 *obase)
 +{
++	const uint nrpages_out = PAGE_ALIGN(rq->pageofs_out +
++					    rq->outputsize) >> PAGE_SHIFT;
 +	unsigned int inputmargin, inlen;
-+	u8 *src;
++	u8 *src, *src2;
 +	bool copied, support_0padding;
 +	int ret;
 +
@@ -701,6 +706,7 @@ index 000000000..19f89f9fb
 +		return -EOPNOTSUPP;
 +
 +	src = kmap_atomic(*rq->in);
++	src2 = src;
 +	inputmargin = 0;
 +	support_0padding = false;
 +
@@ -724,16 +730,15 @@ index 000000000..19f89f9fb
 +	if (rq->inplace_io) {
 +		const uint oend = (rq->pageofs_out +
 +				   rq->outputsize) & ~PAGE_MASK;
-+		const uint nr = PAGE_ALIGN(rq->pageofs_out +
-+					   rq->outputsize) >> PAGE_SHIFT;
-+
 +		if (rq->partial_decoding || !support_0padding ||
-+		    rq->out[nr - 1] != rq->in[0] ||
++		    rq->out[nrpages_out - 1] != rq->in[0] ||
 +		    rq->inputsize - oend <
 +		      LZ4_DECOMPRESS_INPLACE_MARGIN(inlen)) {
 +			src = generic_copy_inplace_data(rq, src, inputmargin);
 +			inputmargin = 0;
 +			copied = true;
++		} else {
++			src = obase + ((nrpages_out - 1) << PAGE_SHIFT);
 +		}
 +	}
 +
@@ -754,7 +759,7 @@ index 000000000..19f89f9fb
 +	if (copied)
 +		erofs_put_pcpubuf(src);
 +	else
-+		kunmap_atomic(src);
++		kunmap_atomic(src2);
 +	return ret;
 +}
 +
@@ -824,7 +829,7 @@ index 000000000..19f89f9fb
 +			return PTR_ERR(dst);
 +
 +		rq->inplace_io = false;
-+		ret = alg->decompress(rq, dst);
++		ret = alg->decompress(rq, dst, NULL);
 +		if (!ret)
 +			copy_from_pcpubuf(rq->out, dst, rq->pageofs_out,
 +					  rq->outputsize);
@@ -858,7 +863,7 @@ index 000000000..19f89f9fb
 +	dst_maptype = 2;
 +
 +dstmap_out:
-+	ret = alg->decompress(rq, dst + rq->pageofs_out);
++	ret = alg->decompress(rq, dst + rq->pageofs_out, dst);
 +
 +	if (!dst_maptype)
 +		kunmap_atomic(dst);
@@ -886,24 +891,22 @@ index 000000000..19f89f9fb
 +	}
 +
 +	src = kmap_atomic(*rq->in);
-+	if (!rq->out[0]) {
-+		dst = NULL;
-+	} else {
++	if (rq->out[0]) {
 +		dst = kmap_atomic(rq->out[0]);
 +		memcpy(dst + rq->pageofs_out, src, righthalf);
++		kunmap_atomic(dst);
 +	}
 +
-+	if (rq->out[1] == *rq->in) {
-+		memmove(src, src + righthalf, rq->pageofs_out);
-+	} else if (nrpages_out == 2) {
-+		if (dst)
-+			kunmap_atomic(dst);
++	if (nrpages_out == 2) {
 +		DBG_BUGON(!rq->out[1]);
-+		dst = kmap_atomic(rq->out[1]);
-+		memcpy(dst, src + righthalf, rq->pageofs_out);
++		if (rq->out[1] == *rq->in) {
++			memmove(src, src + righthalf, rq->pageofs_out);
++		} else {
++			dst = kmap_atomic(rq->out[1]);
++			memcpy(dst, src + righthalf, rq->pageofs_out);
++			kunmap_atomic(dst);
++		}
 +	}
-+	if (dst)
-+		kunmap_atomic(dst);
 +	kunmap_atomic(src);
 +	return 0;
 +}
@@ -1066,10 +1069,10 @@ index 000000000..d28c623df
 +
 diff --git a/fs/erofs/erofs_fs.h b/fs/erofs/erofs_fs.h
 new file mode 100644
-index 000000000..b1ee56547
+index 000000000..52ab96154
 --- /dev/null
 +++ b/fs/erofs/erofs_fs.h
-@@ -0,0 +1,316 @@
+@@ -0,0 +1,319 @@
 +/* SPDX-License-Identifier: GPL-2.0-only OR Apache-2.0 */
 +/*
 + * EROFS (Enhanced ROM File System) on-disk format definition
@@ -1145,6 +1148,9 @@ index 000000000..b1ee56547
 +
 +#define EROFS_I_VERSION_BIT             0
 +#define EROFS_I_DATALAYOUT_BIT          1
++
++#define EROFS_I_ALL	\
++	((1 << (EROFS_I_DATALAYOUT_BIT + EROFS_I_DATALAYOUT_BITS)) - 1)
 +
 +/* 32-byte reduced form of an ondisk inode */
 +struct erofs_inode_compact {
@@ -1388,10 +1394,10 @@ index 000000000..b1ee56547
 +
 diff --git a/fs/erofs/inode.c b/fs/erofs/inode.c
 new file mode 100644
-index 000000000..3350ab65d
+index 000000000..af90d3d70
 --- /dev/null
 +++ b/fs/erofs/inode.c
-@@ -0,0 +1,337 @@
+@@ -0,0 +1,374 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Copyright (C) 2017-2018 HUAWEI, Inc.
@@ -1402,31 +1408,87 @@ index 000000000..3350ab65d
 +
 +#include <trace/events/erofs.h>
 +
-+/* no locking */
-+static int erofs_read_inode(struct inode *inode, void *data)
++/*
++ * if inode is successfully read, return its inode page (or sometimes
++ * the inode payload page if it's an extended inode) in order to fill
++ * inline data if possible.
++ */
++static struct page *erofs_read_inode(struct inode *inode,
++				     unsigned int *ofs)
 +{
++	struct super_block *sb = inode->i_sb;
++	struct erofs_sb_info *sbi = EROFS_SB(sb);
 +	struct erofs_inode *vi = EROFS_I(inode);
-+	struct erofs_inode_compact *dic = data;
-+	struct erofs_inode_extended *die;
++	const erofs_off_t inode_loc = iloc(sbi, vi->nid);
 +
-+	const unsigned int ifmt = le16_to_cpu(dic->i_format);
-+	struct erofs_sb_info *sbi = EROFS_SB(inode->i_sb);
-+	erofs_blk_t nblks = 0;
++	erofs_blk_t blkaddr, nblks = 0;
++	struct page *page;
++	struct erofs_inode_compact *dic;
++	struct erofs_inode_extended *die, *copied = NULL;
++	unsigned int ifmt;
++	int err;
++
++	blkaddr = erofs_blknr(inode_loc);
++	*ofs = erofs_blkoff(inode_loc);
++
++	erofs_dbg("%s, reading inode nid %llu at %u of blkaddr %u",
++		  __func__, vi->nid, *ofs, blkaddr);
++
++	page = erofs_get_meta_page(sb, blkaddr);
++	if (IS_ERR(page)) {
++		erofs_err(sb, "failed to get inode (nid: %llu) page, err %ld",
++			  vi->nid, PTR_ERR(page));
++		return page;
++	}
++
++	dic = page_address(page) + *ofs;
++	ifmt = le16_to_cpu(dic->i_format);
++
++	if (ifmt & ~EROFS_I_ALL) {
++		erofs_err(inode->i_sb, "unsupported i_format %u of nid %llu",
++			  ifmt, vi->nid);
++		err = -EOPNOTSUPP;
++		goto err_out;
++	}
 +
 +	vi->datalayout = erofs_inode_datalayout(ifmt);
-+
 +	if (vi->datalayout >= EROFS_INODE_DATALAYOUT_MAX) {
 +		erofs_err(inode->i_sb, "unsupported datalayout %u of nid %llu",
 +			  vi->datalayout, vi->nid);
-+		DBG_BUGON(1);
-+		return -EOPNOTSUPP;
++		err = -EOPNOTSUPP;
++		goto err_out;
 +	}
 +
 +	switch (erofs_inode_version(ifmt)) {
 +	case EROFS_INODE_LAYOUT_EXTENDED:
-+		die = data;
-+
 +		vi->inode_isize = sizeof(struct erofs_inode_extended);
++		/* check if the inode acrosses page boundary */
++		if (*ofs + vi->inode_isize <= PAGE_SIZE) {
++			*ofs += vi->inode_isize;
++			die = (struct erofs_inode_extended *)dic;
++		} else {
++			const unsigned int gotten = PAGE_SIZE - *ofs;
++
++			copied = kmalloc(vi->inode_isize, GFP_NOFS);
++			if (!copied) {
++				err = -ENOMEM;
++				goto err_out;
++			}
++			memcpy(copied, dic, gotten);
++			unlock_page(page);
++			put_page(page);
++
++			page = erofs_get_meta_page(sb, blkaddr + 1);
++			if (IS_ERR(page)) {
++				erofs_err(sb, "failed to get inode payload page (nid: %llu), err %ld",
++					  vi->nid, PTR_ERR(page));
++				kfree(copied);
++				return page;
++			}
++			*ofs = vi->inode_isize - gotten;
++			memcpy((u8 *)copied + gotten, page_address(page), *ofs);
++			die = copied;
++		}
 +		vi->xattr_isize = erofs_xattr_ibody_size(die->i_xattr_icount);
 +
 +		inode->i_mode = le16_to_cpu(die->i_mode);
@@ -1452,20 +1514,21 @@ index 000000000..3350ab65d
 +		i_gid_write(inode, le32_to_cpu(die->i_gid));
 +		set_nlink(inode, le32_to_cpu(die->i_nlink));
 +
-+		/* ns timestamp */
-+		inode->i_mtime.tv_sec = inode->i_ctime.tv_sec =
-+			le64_to_cpu(die->i_ctime);
-+		inode->i_mtime.tv_nsec = inode->i_ctime.tv_nsec =
-+			le32_to_cpu(die->i_ctime_nsec);
++		/* extended inode has its own timestamp */
++		inode->i_ctime.tv_sec = le64_to_cpu(die->i_ctime);
++		inode->i_ctime.tv_nsec = le32_to_cpu(die->i_ctime_nsec);
 +
 +		inode->i_size = le64_to_cpu(die->i_size);
 +
 +		/* total blocks for compressed files */
 +		if (erofs_inode_is_data_compressed(vi->datalayout))
 +			nblks = le32_to_cpu(die->i_u.compressed_blocks);
++
++		kfree(copied);
 +		break;
 +	case EROFS_INODE_LAYOUT_COMPACT:
 +		vi->inode_isize = sizeof(struct erofs_inode_compact);
++		*ofs += vi->inode_isize;
 +		vi->xattr_isize = erofs_xattr_ibody_size(dic->i_xattr_icount);
 +
 +		inode->i_mode = le16_to_cpu(dic->i_mode);
@@ -1491,11 +1554,9 @@ index 000000000..3350ab65d
 +		i_gid_write(inode, le16_to_cpu(dic->i_gid));
 +		set_nlink(inode, le16_to_cpu(dic->i_nlink));
 +
-+		/* use build time to derive all file time */
-+		inode->i_mtime.tv_sec = inode->i_ctime.tv_sec =
-+			sbi->build_time;
-+		inode->i_mtime.tv_nsec = inode->i_ctime.tv_nsec =
-+			sbi->build_time_nsec;
++		/* use build time for compact inodes */
++		inode->i_ctime.tv_sec = sbi->build_time;
++		inode->i_ctime.tv_nsec = sbi->build_time_nsec;
 +
 +		inode->i_size = le32_to_cpu(dic->i_size);
 +		if (erofs_inode_is_data_compressed(vi->datalayout))
@@ -1505,33 +1566,46 @@ index 000000000..3350ab65d
 +		erofs_err(inode->i_sb,
 +			  "unsupported on-disk inode version %u of nid %llu",
 +			  erofs_inode_version(ifmt), vi->nid);
-+		DBG_BUGON(1);
-+		return -EOPNOTSUPP;
++		err = -EOPNOTSUPP;
++		goto err_out;
 +	}
++
++	inode->i_mtime.tv_sec = inode->i_ctime.tv_sec;
++	inode->i_atime.tv_sec = inode->i_ctime.tv_sec;
++	inode->i_mtime.tv_nsec = inode->i_ctime.tv_nsec;
++	inode->i_atime.tv_nsec = inode->i_ctime.tv_nsec;
 +
 +	if (!nblks)
 +		/* measure inode.i_blocks as generic filesystems */
 +		inode->i_blocks = roundup(inode->i_size, EROFS_BLKSIZ) >> 9;
 +	else
 +		inode->i_blocks = nblks << LOG_SECTORS_PER_BLOCK;
-+	return 0;
++	return page;
 +
 +bogusimode:
 +	erofs_err(inode->i_sb, "bogus i_mode (%o) @ nid %llu",
 +		  inode->i_mode, vi->nid);
++	err = -EFSCORRUPTED;
++err_out:
 +	DBG_BUGON(1);
-+	return -EFSCORRUPTED;
++	kfree(copied);
++	unlock_page(page);
++	put_page(page);
++	return ERR_PTR(err);
 +}
 +
 +static int erofs_fill_symlink(struct inode *inode, void *data,
 +			      unsigned int m_pofs)
 +{
 +	struct erofs_inode *vi = EROFS_I(inode);
++	loff_t off;
 +	char *lnk;
 +
-+	/* if it cannot be handled with fast symlink scheme */
-+	if (vi->datalayout != EROFS_INODE_FLAT_INLINE ||
-+	    inode->i_size >= PAGE_SIZE) {
++	m_pofs += vi->xattr_isize;
++	/* check if it cannot be handled with fast symlink scheme */
++	if (vi->datalayout != EROFS_INODE_FLAT_INLINE || inode->i_size < 0 ||
++	    check_add_overflow((loff_t)m_pofs, inode->i_size, &off) ||
++	    off > i_blocksize(inode)) {
 +		inode->i_op = &erofs_symlink_iops;
 +		return 0;
 +	}
@@ -1539,17 +1613,6 @@ index 000000000..3350ab65d
 +	lnk = kmalloc(inode->i_size + 1, GFP_KERNEL);
 +	if (!lnk)
 +		return -ENOMEM;
-+
-+	m_pofs += vi->inode_isize + vi->xattr_isize;
-+	/* inline symlink data shouldn't cross page boundary as well */
-+	if (m_pofs + inode->i_size > PAGE_SIZE) {
-+		kfree(lnk);
-+		erofs_err(inode->i_sb,
-+			  "inline data cross block boundary @ nid %llu",
-+			  vi->nid);
-+		DBG_BUGON(1);
-+		return -EFSCORRUPTED;
-+	}
 +
 +	memcpy(lnk, data + m_pofs, inode->i_size);
 +	lnk[inode->i_size] = '\0';
@@ -1561,37 +1624,17 @@ index 000000000..3350ab65d
 +
 +static int erofs_fill_inode(struct inode *inode, int isdir)
 +{
-+	struct super_block *sb = inode->i_sb;
 +	struct erofs_inode *vi = EROFS_I(inode);
 +	struct page *page;
-+	void *data;
-+	int err;
-+	erofs_blk_t blkaddr;
 +	unsigned int ofs;
-+	erofs_off_t inode_loc;
++	int err = 0;
 +
 +	trace_erofs_fill_inode(inode, isdir);
-+	inode_loc = iloc(EROFS_SB(sb), vi->nid);
-+	blkaddr = erofs_blknr(inode_loc);
-+	ofs = erofs_blkoff(inode_loc);
 +
-+	erofs_dbg("%s, reading inode nid %llu at %u of blkaddr %u",
-+		  __func__, vi->nid, ofs, blkaddr);
-+
-+	page = erofs_get_meta_page(sb, blkaddr);
-+
-+	if (IS_ERR(page)) {
-+		erofs_err(sb, "failed to get inode (nid: %llu) page, err %ld",
-+			  vi->nid, PTR_ERR(page));
++	/* read inode base data from disk */
++	page = erofs_read_inode(inode, &ofs);
++	if (IS_ERR(page))
 +		return PTR_ERR(page);
-+	}
-+
-+	DBG_BUGON(!PageUptodate(page));
-+	data = page_address(page);
-+
-+	err = erofs_read_inode(inode, data + ofs);
-+	if (err)
-+		goto out_unlock;
 +
 +	/* setup the new inode */
 +	switch (inode->i_mode & S_IFMT) {
@@ -1604,7 +1647,7 @@ index 000000000..3350ab65d
 +		inode->i_fop = &erofs_dir_fops;
 +		break;
 +	case S_IFLNK:
-+		err = erofs_fill_symlink(inode, data, ofs);
++		err = erofs_fill_symlink(inode, page_address(page), ofs);
 +		if (err)
 +			goto out_unlock;
 +		inode_nohighmem(inode);
@@ -1731,10 +1774,10 @@ index 000000000..3350ab65d
 +
 diff --git a/fs/erofs/internal.h b/fs/erofs/internal.h
 new file mode 100644
-index 000000000..8a724510c
+index 000000000..f66498ba1
 --- /dev/null
 +++ b/fs/erofs/internal.h
-@@ -0,0 +1,505 @@
+@@ -0,0 +1,506 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +/*
 + * Copyright (C) 2017-2018 HUAWEI, Inc.
@@ -1754,6 +1797,7 @@ index 000000000..8a724510c
 +#include <linux/slab.h>
 +#include <linux/vmalloc.h>
 +#include <linux/spinlock.h>
++#include <linux/overflow.h>
 +#include <asm/barrier.h>
 +#include "erofs_fs.h"
 +
@@ -3251,10 +3295,10 @@ index 000000000..a72897c86
 +
 diff --git a/fs/erofs/utils.c b/fs/erofs/utils.c
 new file mode 100644
-index 000000000..29f53c16b
+index 000000000..bda22b1cb
 --- /dev/null
 +++ b/fs/erofs/utils.c
-@@ -0,0 +1,333 @@
+@@ -0,0 +1,328 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Copyright (C) 2018 HUAWEI, Inc.
@@ -3268,13 +3312,8 @@ index 000000000..29f53c16b
 +{
 +	struct page *page;
 +
-+	if (!list_empty(pool)) {
-+		page = lru_to_page(pool);
-+		DBG_BUGON(page_ref_count(page) != 1);
-+		list_del(&page->lru);
-+	} else {
-+		page = alloc_pages(gfp | (nofail ? __GFP_NOFAIL : 0), 0);
-+	}
++	(void)pool;
++	page = alloc_pages(gfp | (nofail ? __GFP_NOFAIL : 0), 0);
 +	return page;
 +}
 +
@@ -3551,7 +3590,7 @@ index 000000000..29f53c16b
 +		spin_unlock(&erofs_sb_list_lock);
 +		sbi->shrinker_run_no = run_no;
 +
-+		freed += erofs_shrink_workstation(sbi, nr, false);
++		freed += erofs_shrink_workstation(sbi, nr - freed, false);
 +
 +		spin_lock(&erofs_sb_list_lock);
 +		/* Get the next list element before we move this one */
@@ -3590,10 +3629,10 @@ index 000000000..29f53c16b
 +
 diff --git a/fs/erofs/xattr.c b/fs/erofs/xattr.c
 new file mode 100644
-index 000000000..a13a78725
+index 000000000..5788623d7
 --- /dev/null
 +++ b/fs/erofs/xattr.c
-@@ -0,0 +1,704 @@
+@@ -0,0 +1,714 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Copyright (C) 2017-2018 HUAWEI, Inc.
@@ -3644,8 +3683,14 @@ index 000000000..a13a78725
 +	int ret = 0;
 +
 +	/* the most case is that xattrs of this inode are initialized. */
-+	if (test_bit(EROFS_I_EA_INITED_BIT, &vi->flags))
++	if (test_bit(EROFS_I_EA_INITED_BIT, &vi->flags)) {
++		/*
++		 * paired with smp_mb() at the end of the function to ensure
++		 * fields will only be observed after the bit is set.
++		 */
++		smp_mb();
 +		return 0;
++	}
 +
 +	if (wait_on_bit_lock(&vi->flags, EROFS_I_BL_XATTR_BIT, TASK_KILLABLE))
 +		return -ERESTARTSYS;
@@ -3733,6 +3778,8 @@ index 000000000..a13a78725
 +	}
 +	xattr_iter_end(&it, atomic_map);
 +
++	/* paired with smp_mb() at the beginning of the function. */
++	smp_mb();
 +	set_bit(EROFS_I_EA_INITED_BIT, &vi->flags);
 +
 +out_unlock:
@@ -4245,6 +4292,8 @@ index 000000000..a13a78725
 +	struct listxattr_iter it;
 +
 +	ret = init_inode_xattrs(d_inode(dentry));
++	if (ret == -ENOATTR)
++		return 0;
 +	if (ret)
 +		return ret;
 +
@@ -4398,7 +4447,7 @@ index 000000000..3585b84d2
 +
 diff --git a/fs/erofs/zdata.c b/fs/erofs/zdata.c
 new file mode 100644
-index 000000000..461b2e897
+index 000000000..1e7965539
 --- /dev/null
 +++ b/fs/erofs/zdata.c
 @@ -0,0 +1,1439 @@
@@ -4692,11 +4741,10 @@ index 000000000..461b2e897
 +
 +/* callers must be with collection lock held */
 +static int z_erofs_attach_page(struct z_erofs_collector *clt,
-+			       struct page *page,
-+			       enum z_erofs_page_type type)
++			       struct page *page, enum z_erofs_page_type type,
++			       bool pvec_safereuse)
 +{
 +	int ret;
-+	bool occupied;
 +
 +	/* give priority for inplaceio */
 +	if (clt->mode >= COLLECT_PRIMARY &&
@@ -4704,10 +4752,9 @@ index 000000000..461b2e897
 +	    z_erofs_try_inplace_io(clt, page))
 +		return 0;
 +
-+	ret = z_erofs_pagevec_enqueue(&clt->vector,
-+				      page, type, &occupied);
++	ret = z_erofs_pagevec_enqueue(&clt->vector, page, type,
++				      pvec_safereuse);
 +	clt->cl->vcnt += (unsigned int)ret;
-+
 +	return ret ? 0 : -EAGAIN;
 +}
 +
@@ -5042,9 +5089,11 @@ index 000000000..461b2e897
 +	tight &= (clt->mode >= COLLECT_PRIMARY_HOOKED &&
 +		  clt->mode != COLLECT_PRIMARY_FOLLOWED_NOINPLACE);
 +
-+	cur = end - min_t(unsigned int, offset + end - map->m_la, end);
++	cur = end - min_t(erofs_off_t, offset + end - map->m_la, end);
 +	if (!(map->m_flags & EROFS_MAP_MAPPED)) {
 +		zero_user_segment(page, cur, end);
++		++spiltted;
++		tight = false;
 +		goto next_part;
 +	}
 +
@@ -5058,14 +5107,15 @@ index 000000000..461b2e897
 +		tight &= (clt->mode >= COLLECT_PRIMARY_FOLLOWED);
 +
 +retry:
-+	err = z_erofs_attach_page(clt, page, page_type);
++	err = z_erofs_attach_page(clt, page, page_type,
++				  clt->mode >= COLLECT_PRIMARY_FOLLOWED);
 +	/* should allocate an additional staging page for pagevec */
 +	if (err == -EAGAIN) {
 +		struct page *const newpage =
 +			__stagingpage_alloc(pagepool, GFP_NOFS);
 +
 +		err = z_erofs_attach_page(clt, newpage,
-+					  Z_EROFS_PAGE_TYPE_EXCLUSIVE);
++					  Z_EROFS_PAGE_TYPE_EXCLUSIVE, true);
 +		if (!err)
 +			goto retry;
 +	}
@@ -5768,7 +5818,7 @@ index 000000000..461b2e897
 +	return nr <= sbi->max_sync_decompress_pages;
 +}
 +
-+static int z_erofs_vle_normalaccess_readpages(struct file *filp,
++static int __maybe_unused z_erofs_vle_normalaccess_readpages(struct file *filp,
 +					      struct address_space *mapping,
 +					      struct list_head *pages,
 +					      unsigned int nr_pages)
@@ -5838,12 +5888,11 @@ index 000000000..461b2e897
 +
 +const struct address_space_operations z_erofs_vle_normalaccess_aops = {
 +	.readpage = z_erofs_vle_normalaccess_readpage,
-+	.readpages = z_erofs_vle_normalaccess_readpages,
 +};
 +
 diff --git a/fs/erofs/zdata.h b/fs/erofs/zdata.h
 new file mode 100644
-index 000000000..faf950189
+index 000000000..568d5a493
 --- /dev/null
 +++ b/fs/erofs/zdata.h
 @@ -0,0 +1,193 @@
@@ -5997,22 +6046,22 @@ index 000000000..faf950189
 +static inline void z_erofs_onlinepage_fixup(struct page *page,
 +	uintptr_t index, bool down)
 +{
-+	unsigned long *p, o, v, id;
-+repeat:
-+	p = &page_private(page);
-+	o = READ_ONCE(*p);
++	union z_erofs_onlinepage_converter u = { .v = &page_private(page) };
++	int orig, orig_index, val;
 +
-+	id = o >> Z_EROFS_ONLINEPAGE_INDEX_SHIFT;
-+	if (id) {
++repeat:
++	orig = atomic_read(u.o);
++	orig_index = orig >> Z_EROFS_ONLINEPAGE_INDEX_SHIFT;
++	if (orig_index) {
 +		if (!index)
 +			return;
 +
-+		DBG_BUGON(id != index);
++		DBG_BUGON(orig_index != index);
 +	}
 +
-+	v = (index << Z_EROFS_ONLINEPAGE_INDEX_SHIFT) |
-+		((o & Z_EROFS_ONLINEPAGE_COUNT_MASK) + (unsigned int)down);
-+	if (cmpxchg(p, o, v) != o)
++	val = (index << Z_EROFS_ONLINEPAGE_INDEX_SHIFT) |
++		((orig & Z_EROFS_ONLINEPAGE_COUNT_MASK) + (unsigned int)down);
++	if (atomic_cmpxchg(u.o, orig, val) != orig)
 +		goto repeat;
 +}
 +
@@ -6042,10 +6091,10 @@ index 000000000..faf950189
 +
 diff --git a/fs/erofs/zmap.c b/fs/erofs/zmap.c
 new file mode 100644
-index 000000000..6a26c293a
+index 000000000..6553f58fb
 --- /dev/null
 +++ b/fs/erofs/zmap.c
-@@ -0,0 +1,471 @@
+@@ -0,0 +1,479 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Copyright (C) 2018-2019 HUAWEI, Inc.
@@ -6084,8 +6133,14 @@ index 000000000..6a26c293a
 +	void *kaddr;
 +	struct z_erofs_map_header *h;
 +
-+	if (test_bit(EROFS_I_Z_INITED_BIT, &vi->flags))
++	if (test_bit(EROFS_I_Z_INITED_BIT, &vi->flags)) {
++		/*
++		 * paired with smp_mb() at the end of the function to ensure
++		 * fields will only be observed after the bit is set.
++		 */
++		smp_mb();
 +		return 0;
++	}
 +
 +	if (wait_on_bit_lock(&vi->flags, EROFS_I_BL_Z_BIT, TASK_KILLABLE))
 +		return -ERESTARTSYS;
@@ -6131,6 +6186,8 @@ index 000000000..6a26c293a
 +
 +	vi->z_physical_clusterbits[1] = vi->z_logical_clusterbits +
 +					((h->h_clusterbits >> 5) & 7);
++	/* paired with smp_mb() at the beginning of the function */
++	smp_mb();
 +	set_bit(EROFS_I_Z_INITED_BIT, &vi->flags);
 +unmap_done:
 +	kunmap_atomic(kaddr);
@@ -6219,6 +6276,10 @@ index 000000000..6a26c293a
 +	case Z_EROFS_VLE_CLUSTER_TYPE_PLAIN:
 +	case Z_EROFS_VLE_CLUSTER_TYPE_HEAD:
 +		m->clusterofs = le16_to_cpu(di->di_clusterofs);
++		if (m->clusterofs >= 1 << vi->z_logical_clusterbits) {
++			DBG_BUGON(1);
++			return -EFSCORRUPTED;
++		}
 +		m->pblk = le32_to_cpu(di->di_u.blkaddr);
 +		break;
 +	default:
@@ -6251,7 +6312,7 @@ index 000000000..6a26c293a
 +	int i;
 +	u8 *in, type;
 +
-+	if (1 << amortizedshift == 4)
++	if (1 << amortizedshift == 4 && lclusterbits <= 14)
 +		vcnt = 2;
 +	else if (1 << amortizedshift == 2 && lclusterbits == 12)
 +		vcnt = 16;
@@ -6309,7 +6370,6 @@ index 000000000..6a26c293a
 +{
 +	struct inode *const inode = m->inode;
 +	struct erofs_inode *const vi = EROFS_I(inode);
-+	const unsigned int lclusterbits = vi->z_logical_clusterbits;
 +	const erofs_off_t ebase = ALIGN(iloc(EROFS_I_SB(inode), vi->nid) +
 +					vi->inode_isize + vi->xattr_isize, 8) +
 +		sizeof(struct z_erofs_map_header);
@@ -6318,9 +6378,6 @@ index 000000000..6a26c293a
 +	unsigned int amortizedshift;
 +	erofs_off_t pos;
 +	int err;
-+
-+	if (lclusterbits != 12)
-+		return -EOPNOTSUPP;
 +
 +	if (lcn >= totalidx)
 +		return -EINVAL;
@@ -6519,10 +6576,10 @@ index 000000000..6a26c293a
 +
 diff --git a/fs/erofs/zpvec.h b/fs/erofs/zpvec.h
 new file mode 100644
-index 000000000..58556903a
+index 000000000..6a20b2c3a
 --- /dev/null
 +++ b/fs/erofs/zpvec.h
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,161 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +/*
 + * Copyright (C) 2018 HUAWEI, Inc.
@@ -6633,12 +6690,17 @@ index 000000000..58556903a
 +static inline bool z_erofs_pagevec_enqueue(struct z_erofs_pagevec_ctor *ctor,
 +					   struct page *page,
 +					   enum z_erofs_page_type type,
-+					   bool *occupied)
++					   bool pvec_safereuse)
 +{
-+	*occupied = false;
-+	if (!ctor->next && type)
-+		if (ctor->index + 1 == ctor->nr)
++	if (!ctor->next) {
++		/* some pages cannot be reused as pvec safely without I/O */
++		if (type == Z_EROFS_PAGE_TYPE_EXCLUSIVE && !pvec_safereuse)
++			type = Z_EROFS_VLE_PAGE_TYPE_TAIL_SHARED;
++
++		if (type != Z_EROFS_PAGE_TYPE_EXCLUSIVE &&
++		    ctor->index + 1 == ctor->nr)
 +			return false;
++	}
 +
 +	if (ctor->index >= ctor->nr)
 +		z_erofs_pagevec_ctor_pagedown(ctor, false);
@@ -6650,7 +6712,6 @@ index 000000000..58556903a
 +	/* should remind that collector->next never equal to 1, 2 */
 +	if (type == (uintptr_t)ctor->next) {
 +		ctor->next = page;
-+		*occupied = true;
 +	}
 +	ctor->pages[ctor->index++] = tagptr_fold(erofs_vtptr_t, page, type);
 +	return true;
@@ -6956,11 +7017,762 @@ index de394b150..523a4db40 100644
 +#define EROFS_SUPER_MAGIC_V1	0xE0F5E1E2
  
  #endif /* __LINUX_MAGIC_H__ */
-diff --git a/arch/arm64/configs/lancelot_defconfig b/arch/arm64/configs/lancelot_defconfig
---- a/arch/arm64/configs/lancelot_defconfig
-+++ b/arch/arm64/configs/lancelot_defconfig
-@@ -440,3 +440,4 @@
- CONFIG_BT=y
- CONFIG_WLAN_DRV_BUILD_IN=y
- # CONFIG_PRINTK_MT_PREFIX is not set
-+CONFIG_EROFS_FS=y
+diff --git a/lib/lz4/lz4_decompress.c b/lib/lz4/lz4_decompress.c
+index 141734d25..0c9d3ad17 100644
+--- a/lib/lz4/lz4_decompress.c
++++ b/lib/lz4/lz4_decompress.c
+@@ -43,30 +43,36 @@
+ /*-*****************************
+  *	Decompression functions
+  *******************************/
+-/* LZ4_decompress_generic() :
+- * This generic decompression function cover all use cases.
+- * It shall be instantiated several times, using different sets of directives
+- * Note that it is important this generic function is really inlined,
++
++#define DEBUGLOG(l, ...) {}	/* disabled */
++
++#ifndef assert
++#define assert(condition) ((void)0)
++#endif
++
++/*
++ * LZ4_decompress_generic() :
++ * This generic decompression function covers all use cases.
++ * It shall be instantiated several times, using different sets of directives.
++ * Note that it is important for performance that this function really get inlined,
+  * in order to remove useless branches during compilation optimization.
+  */
+ static FORCE_INLINE int LZ4_decompress_generic(
+-	 const char * const source,
+-	 char * const dest,
+-	 int inputSize,
++	 const char * const src,
++	 char * const dst,
++	 int srcSize,
+ 		/*
+ 		 * If endOnInput == endOnInputSize,
+-		 * this value is the max size of Output Buffer.
++		 * this value is `dstCapacity`
+ 		 */
+ 	 int outputSize,
+ 	 /* endOnOutputSize, endOnInputSize */
+-	 int endOnInput,
++	 endCondition_directive endOnInput,
+ 	 /* full, partial */
+-	 int partialDecoding,
+-	 /* only used if partialDecoding == partial */
+-	 int targetOutputSize,
++	 earlyEnd_directive partialDecoding,
+ 	 /* noDict, withPrefix64k, usingExtDict */
+-	 int dict,
+-	 /* == dest when no prefix */
++	 dict_directive dict,
++	 /* always <= dst, == dst when no prefix */
+ 	 const BYTE * const lowPrefix,
+ 	 /* only if dict == usingExtDict */
+ 	 const BYTE * const dictStart,
+@@ -74,35 +80,43 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 	 const size_t dictSize
+ 	 )
+ {
+-	/* Local Variables */
+-	const BYTE *ip = (const BYTE *) source;
+-	const BYTE * const iend = ip + inputSize;
++	const BYTE *ip = (const BYTE *) src;
++	const BYTE * const iend = ip + srcSize;
+ 
+-	BYTE *op = (BYTE *) dest;
++	BYTE *op = (BYTE *) dst;
+ 	BYTE * const oend = op + outputSize;
+ 	BYTE *cpy;
+-	BYTE *oexit = op + targetOutputSize;
+-	const BYTE * const lowLimit = lowPrefix - dictSize;
+ 
+ 	const BYTE * const dictEnd = (const BYTE *)dictStart + dictSize;
+-	static const unsigned int dec32table[] = { 0, 1, 2, 1, 4, 4, 4, 4 };
+-	static const int dec64table[] = { 0, 0, 0, -1, 0, 1, 2, 3 };
++	static const unsigned int inc32table[8] = {0, 1, 2, 1, 0, 4, 4, 4};
++	static const int dec64table[8] = {0, 0, 0, -1, -4, 1, 2, 3};
+ 
+ 	const int safeDecode = (endOnInput == endOnInputSize);
+ 	const int checkOffset = ((safeDecode) && (dictSize < (int)(64 * KB)));
+ 
++	/* Set up the "end" pointers for the shortcut. */
++	const BYTE *const shortiend = iend -
++		(endOnInput ? 14 : 8) /*maxLL*/ - 2 /*offset*/;
++	const BYTE *const shortoend = oend -
++		(endOnInput ? 14 : 8) /*maxLL*/ - 18 /*maxML*/;
++
++	DEBUGLOG(5, "%s (srcSize:%i, dstSize:%i)", __func__,
++		 srcSize, outputSize);
++
+ 	/* Special cases */
+-	/* targetOutputSize too high => decode everything */
+-	if ((partialDecoding) && (oexit > oend - MFLIMIT))
+-		oexit = oend - MFLIMIT;
++	assert(lowPrefix <= op);
++	assert(src != NULL);
+ 
+ 	/* Empty output buffer */
+ 	if ((endOnInput) && (unlikely(outputSize == 0)))
+-		return ((inputSize == 1) && (*ip == 0)) ? 0 : -1;
++		return ((srcSize == 1) && (*ip == 0)) ? 0 : -1;
+ 
+ 	if ((!endOnInput) && (unlikely(outputSize == 0)))
+ 		return (*ip == 0 ? 1 : -1);
+ 
++	if ((endOnInput) && unlikely(srcSize == 0))
++		return -1;
++
+ 	/* Main Loop : decode sequences */
+ 	while (1) {
+ 		size_t length;
+@@ -111,12 +125,74 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 
+ 		/* get literal length */
+ 		unsigned int const token = *ip++;
+-
+ 		length = token>>ML_BITS;
+ 
++		/* ip < iend before the increment */
++		assert(!endOnInput || ip <= iend);
++
++		/*
++		 * A two-stage shortcut for the most common case:
++		 * 1) If the literal length is 0..14, and there is enough
++		 * space, enter the shortcut and copy 16 bytes on behalf
++		 * of the literals (in the fast mode, only 8 bytes can be
++		 * safely copied this way).
++		 * 2) Further if the match length is 4..18, copy 18 bytes
++		 * in a similar manner; but we ensure that there's enough
++		 * space in the output for those 18 bytes earlier, upon
++		 * entering the shortcut (in other words, there is a
++		 * combined check for both stages).
++		 */
++		if ((endOnInput ? length != RUN_MASK : length <= 8)
++		   /*
++		    * strictly "less than" on input, to re-enter
++		    * the loop with at least one byte
++		    */
++		   && likely((endOnInput ? ip < shortiend : 1) &
++			     (op <= shortoend))) {
++			/* Copy the literals */
++			memcpy(op, ip, endOnInput ? 16 : 8);
++			op += length; ip += length;
++
++			/*
++			 * The second stage:
++			 * prepare for match copying, decode full info.
++			 * If it doesn't work out, the info won't be wasted.
++			 */
++			length = token & ML_MASK; /* match length */
++			offset = LZ4_readLE16(ip);
++			ip += 2;
++			match = op - offset;
++			assert(match <= op); /* check overflow */
++
++			/* Do not deal with overlapping matches. */
++			if ((length != ML_MASK) &&
++			    (offset >= 8) &&
++			    (dict == withPrefix64k || match >= lowPrefix)) {
++				/* Copy the match. */
++				memcpy(op + 0, match + 0, 8);
++				memcpy(op + 8, match + 8, 8);
++				memcpy(op + 16, match + 16, 2);
++				op += length + MINMATCH;
++				/* Both stages worked, load the next token. */
++				continue;
++			}
++
++			/*
++			 * The second stage didn't work out, but the info
++			 * is ready. Propel it right to the point of match
++			 * copying.
++			 */
++			goto _copy_match;
++		}
++
++		/* decode literal length */
+ 		if (length == RUN_MASK) {
+ 			unsigned int s;
+ 
++			if (unlikely(endOnInput ? ip >= iend - RUN_MASK : 0)) {
++				/* overflow detection */
++				goto _output_error;
++			}
+ 			do {
+ 				s = *ip++;
+ 				length += s;
+@@ -125,14 +201,14 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 				: 1) & (s == 255));
+ 
+ 			if ((safeDecode)
+-				&& unlikely(
+-					(size_t)(op + length) < (size_t)(op))) {
++			    && unlikely((uptrval)(op) +
++					length < (uptrval)(op))) {
+ 				/* overflow detection */
+ 				goto _output_error;
+ 			}
+ 			if ((safeDecode)
+-				&& unlikely(
+-					(size_t)(ip + length) < (size_t)(ip))) {
++			    && unlikely((uptrval)(ip) +
++					length < (uptrval)(ip))) {
+ 				/* overflow detection */
+ 				goto _output_error;
+ 			}
+@@ -140,16 +216,19 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 
+ 		/* copy literals */
+ 		cpy = op + length;
+-		if (((endOnInput) && ((cpy > (partialDecoding ? oexit : oend - MFLIMIT))
++		LZ4_STATIC_ASSERT(MFLIMIT >= WILDCOPYLENGTH);
++
++		if (((endOnInput) && ((cpy > oend - MFLIMIT)
+ 			|| (ip + length > iend - (2 + 1 + LASTLITERALS))))
+ 			|| ((!endOnInput) && (cpy > oend - WILDCOPYLENGTH))) {
+ 			if (partialDecoding) {
+ 				if (cpy > oend) {
+ 					/*
+-					 * Error :
+-					 * write attempt beyond end of output buffer
++					 * Partial decoding :
++					 * stop in the middle of literal segment
+ 					 */
+-					goto _output_error;
++					cpy = oend;
++					length = oend - op;
+ 				}
+ 				if ((endOnInput)
+ 					&& (ip + length > iend)) {
+@@ -184,29 +263,43 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 			memcpy(op, ip, length);
+ 			ip += length;
+ 			op += length;
++
+ 			/* Necessarily EOF, due to parsing restrictions */
+-			break;
++			if (!partialDecoding || (cpy == oend))
++				break;
++		} else {
++			/* may overwrite up to WILDCOPYLENGTH beyond cpy */
++			LZ4_wildCopy(op, ip, cpy);
++			ip += length;
++			op = cpy;
+ 		}
+ 
+-		LZ4_wildCopy(op, ip, cpy);
+-		ip += length;
+-		op = cpy;
+-
+ 		/* get offset */
+ 		offset = LZ4_readLE16(ip);
+ 		ip += 2;
+ 		match = op - offset;
+ 
+-		if ((checkOffset) && (unlikely(match < lowLimit))) {
++		/* get matchlength */
++		length = token & ML_MASK;
++
++_copy_match:
++		if ((checkOffset) && (unlikely(match + dictSize < lowPrefix))) {
+ 			/* Error : offset outside buffers */
+ 			goto _output_error;
+ 		}
+ 
+ 		/* costs ~1%; silence an msan warning when offset == 0 */
+-		LZ4_write32(op, (U32)offset);
++		/*
++		 * note : when partialDecoding, there is no guarantee that
++		 * at least 4 bytes remain available in output buffer
++		 */
++		if (!partialDecoding) {
++			assert(oend > op);
++			assert(oend - op >= 4);
++
++			LZ4_write32(op, (U32)offset);
++		}
+ 
+-		/* get matchlength */
+-		length = token & ML_MASK;
+ 		if (length == ML_MASK) {
+ 			unsigned int s;
+ 
+@@ -221,7 +314,7 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 
+ 			if ((safeDecode)
+ 				&& unlikely(
+-					(size_t)(op + length) < (size_t)op)) {
++					(uptrval)(op) + length < (uptrval)op)) {
+ 				/* overflow detection */
+ 				goto _output_error;
+ 			}
+@@ -229,24 +322,26 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 
+ 		length += MINMATCH;
+ 
+-		/* check external dictionary */
++		/* match starting within external dictionary */
+ 		if ((dict == usingExtDict) && (match < lowPrefix)) {
+ 			if (unlikely(op + length > oend - LASTLITERALS)) {
+ 				/* doesn't respect parsing restriction */
+-				goto _output_error;
++				if (!partialDecoding)
++					goto _output_error;
++				length = min(length, (size_t)(oend - op));
+ 			}
+ 
+ 			if (length <= (size_t)(lowPrefix - match)) {
+ 				/*
+-				 * match can be copied as a single segment
+-				 * from external dictionary
++				 * match fits entirely within external
++				 * dictionary : just copy
+ 				 */
+ 				memmove(op, dictEnd - (lowPrefix - match),
+ 					length);
+ 				op += length;
+ 			} else {
+ 				/*
+-				 * match encompass external
++				 * match stretches into both external
+ 				 * dictionary and current block
+ 				 */
+ 				size_t const copySize = (size_t)(lowPrefix - match);
+@@ -254,7 +349,6 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 
+ 				memcpy(op, dictEnd - copySize, copySize);
+ 				op += copySize;
+-
+ 				if (restSize > (size_t)(op - lowPrefix)) {
+ 					/* overlap copy */
+ 					BYTE * const endOfMatch = op + restSize;
+@@ -267,23 +361,44 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 					op += restSize;
+ 				}
+ 			}
+-
+ 			continue;
+ 		}
+ 
+ 		/* copy match within block */
+ 		cpy = op + length;
+ 
+-		if (unlikely(offset < 8)) {
+-			const int dec64 = dec64table[offset];
++		/*
++		 * partialDecoding :
++		 * may not respect endBlock parsing restrictions
++		 */
++		assert(op <= oend);
++		if (partialDecoding &&
++		    (cpy > oend - MATCH_SAFEGUARD_DISTANCE)) {
++			size_t const mlen = min(length, (size_t)(oend - op));
++			const BYTE * const matchEnd = match + mlen;
++			BYTE * const copyEnd = op + mlen;
++
++			if (matchEnd > op) {
++				/* overlap copy */
++				while (op < copyEnd)
++					*op++ = *match++;
++			} else {
++				memcpy(op, match, mlen);
++			}
++			op = copyEnd;
++			if (op == oend)
++				break;
++			continue;
++		}
+ 
++		if (unlikely(offset < 8)) {
+ 			op[0] = match[0];
+ 			op[1] = match[1];
+ 			op[2] = match[2];
+ 			op[3] = match[3];
+-			match += dec32table[offset];
++			match += inc32table[offset];
+ 			memcpy(op + 4, match, 4);
+-			match -= dec64;
++			match -= dec64table[offset];
+ 		} else {
+ 			LZ4_copy8(op, match);
+ 			match += 8;
+@@ -291,7 +406,7 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 
+ 		op += 8;
+ 
+-		if (unlikely(cpy > oend - 12)) {
++		if (unlikely(cpy > oend - MATCH_SAFEGUARD_DISTANCE)) {
+ 			BYTE * const oCopyLimit = oend - (WILDCOPYLENGTH - 1);
+ 
+ 			if (cpy > oend - LASTLITERALS) {
+@@ -307,60 +422,139 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 				match += oCopyLimit - op;
+ 				op = oCopyLimit;
+ 			}
+-
+ 			while (op < cpy)
+ 				*op++ = *match++;
+ 		} else {
+ 			LZ4_copy8(op, match);
+-
+ 			if (length > 16)
+ 				LZ4_wildCopy(op + 8, match + 8, cpy);
+ 		}
+-
+-		op = cpy; /* correction */
++		op = cpy; /* wildcopy correction */
+ 	}
+ 
+ 	/* end of decoding */
+ 	if (endOnInput) {
+ 		/* Nb of output bytes decoded */
+-		return (int) (((char *)op) - dest);
++		return (int) (((char *)op) - dst);
+ 	} else {
+ 		/* Nb of input bytes read */
+-		return (int) (((const char *)ip) - source);
++		return (int) (((const char *)ip) - src);
+ 	}
+ 
+ 	/* Overflow error detected */
+ _output_error:
+-	return -1;
++	return (int) (-(((const char *)ip) - src)) - 1;
+ }
+ 
+ int LZ4_decompress_safe(const char *source, char *dest,
+ 	int compressedSize, int maxDecompressedSize)
+ {
+-	return LZ4_decompress_generic(source, dest, compressedSize,
+-		maxDecompressedSize, endOnInputSize, full, 0,
+-		noDict, (BYTE *)dest, NULL, 0);
++	return LZ4_decompress_generic(source, dest,
++				      compressedSize, maxDecompressedSize,
++				      endOnInputSize, decode_full_block,
++				      noDict, (BYTE *)dest, NULL, 0);
+ }
+ 
+-int LZ4_decompress_safe_partial(const char *source, char *dest,
+-	int compressedSize, int targetOutputSize, int maxDecompressedSize)
++int LZ4_decompress_safe_partial(const char *src, char *dst,
++	int compressedSize, int targetOutputSize, int dstCapacity)
+ {
+-	return LZ4_decompress_generic(source, dest, compressedSize,
+-		maxDecompressedSize, endOnInputSize, partial,
+-		targetOutputSize, noDict, (BYTE *)dest, NULL, 0);
++	dstCapacity = min(targetOutputSize, dstCapacity);
++	return LZ4_decompress_generic(src, dst, compressedSize, dstCapacity,
++				      endOnInputSize, partial_decode,
++				      noDict, (BYTE *)dst, NULL, 0);
+ }
+ 
+ int LZ4_decompress_fast(const char *source, char *dest, int originalSize)
+ {
+ 	return LZ4_decompress_generic(source, dest, 0, originalSize,
+-		endOnOutputSize, full, 0, withPrefix64k,
+-		(BYTE *)(dest - 64 * KB), NULL, 64 * KB);
++				      endOnOutputSize, decode_full_block,
++				      withPrefix64k,
++				      (BYTE *)dest - 64 * KB, NULL, 0);
++}
++
++/* ===== Instantiate a few more decoding cases, used more than once. ===== */
++
++int LZ4_decompress_safe_withPrefix64k(const char *source, char *dest,
++				      int compressedSize, int maxOutputSize)
++{
++	return LZ4_decompress_generic(source, dest,
++				      compressedSize, maxOutputSize,
++				      endOnInputSize, decode_full_block,
++				      withPrefix64k,
++				      (BYTE *)dest - 64 * KB, NULL, 0);
++}
++
++static int LZ4_decompress_safe_withSmallPrefix(const char *source, char *dest,
++					       int compressedSize,
++					       int maxOutputSize,
++					       size_t prefixSize)
++{
++	return LZ4_decompress_generic(source, dest,
++				      compressedSize, maxOutputSize,
++				      endOnInputSize, decode_full_block,
++				      noDict,
++				      (BYTE *)dest - prefixSize, NULL, 0);
++}
++
++int LZ4_decompress_safe_forceExtDict(const char *source, char *dest,
++				     int compressedSize, int maxOutputSize,
++				     const void *dictStart, size_t dictSize)
++{
++	return LZ4_decompress_generic(source, dest,
++				      compressedSize, maxOutputSize,
++				      endOnInputSize, decode_full_block,
++				      usingExtDict, (BYTE *)dest,
++				      (const BYTE *)dictStart, dictSize);
+ }
+ 
++static int LZ4_decompress_fast_extDict(const char *source, char *dest,
++				       int originalSize,
++				       const void *dictStart, size_t dictSize)
++{
++	return LZ4_decompress_generic(source, dest,
++				      0, originalSize,
++				      endOnOutputSize, decode_full_block,
++				      usingExtDict, (BYTE *)dest,
++				      (const BYTE *)dictStart, dictSize);
++}
++
++/*
++ * The "double dictionary" mode, for use with e.g. ring buffers: the first part
++ * of the dictionary is passed as prefix, and the second via dictStart + dictSize.
++ * These routines are used only once, in LZ4_decompress_*_continue().
++ */
++static FORCE_INLINE
++int LZ4_decompress_safe_doubleDict(const char *source, char *dest,
++				   int compressedSize, int maxOutputSize,
++				   size_t prefixSize,
++				   const void *dictStart, size_t dictSize)
++{
++	return LZ4_decompress_generic(source, dest,
++				      compressedSize, maxOutputSize,
++				      endOnInputSize, decode_full_block,
++				      usingExtDict, (BYTE *)dest - prefixSize,
++				      (const BYTE *)dictStart, dictSize);
++}
++
++static FORCE_INLINE
++int LZ4_decompress_fast_doubleDict(const char *source, char *dest,
++				   int originalSize, size_t prefixSize,
++				   const void *dictStart, size_t dictSize)
++{
++	return LZ4_decompress_generic(source, dest,
++				      0, originalSize,
++				      endOnOutputSize, decode_full_block,
++				      usingExtDict, (BYTE *)dest - prefixSize,
++				      (const BYTE *)dictStart, dictSize);
++}
++
++/* ===== streaming decompression functions ===== */
++
+ int LZ4_setStreamDecode(LZ4_streamDecode_t *LZ4_streamDecode,
+ 	const char *dictionary, int dictSize)
+ {
+-	LZ4_streamDecode_t_internal *lz4sd = (LZ4_streamDecode_t_internal *) LZ4_streamDecode;
++	LZ4_streamDecode_t_internal *lz4sd =
++		&LZ4_streamDecode->internal_donotuse;
+ 
+ 	lz4sd->prefixSize = (size_t) dictSize;
+ 	lz4sd->prefixEnd = (const BYTE *) dictionary + dictSize;
+@@ -382,35 +576,51 @@ int LZ4_setStreamDecode(LZ4_streamDecode_t *LZ4_streamDecode,
+ int LZ4_decompress_safe_continue(LZ4_streamDecode_t *LZ4_streamDecode,
+ 	const char *source, char *dest, int compressedSize, int maxOutputSize)
+ {
+-	LZ4_streamDecode_t_internal *lz4sd = &LZ4_streamDecode->internal_donotuse;
++	LZ4_streamDecode_t_internal *lz4sd =
++		&LZ4_streamDecode->internal_donotuse;
+ 	int result;
+ 
+-	if (lz4sd->prefixEnd == (BYTE *)dest) {
+-		result = LZ4_decompress_generic(source, dest,
+-			compressedSize,
+-			maxOutputSize,
+-			endOnInputSize, full, 0,
+-			usingExtDict, lz4sd->prefixEnd - lz4sd->prefixSize,
+-			lz4sd->externalDict,
+-			lz4sd->extDictSize);
+-
++	if (lz4sd->prefixSize == 0) {
++		/* The first call, no dictionary yet. */
++		assert(lz4sd->extDictSize == 0);
++		result = LZ4_decompress_safe(source, dest,
++			compressedSize, maxOutputSize);
++		if (result <= 0)
++			return result;
++		lz4sd->prefixSize = result;
++		lz4sd->prefixEnd = (BYTE *)dest + result;
++	} else if (lz4sd->prefixEnd == (BYTE *)dest) {
++		/* They're rolling the current segment. */
++		if (lz4sd->prefixSize >= 64 * KB - 1)
++			result = LZ4_decompress_safe_withPrefix64k(source, dest,
++				compressedSize, maxOutputSize);
++		else if (lz4sd->extDictSize == 0)
++			result = LZ4_decompress_safe_withSmallPrefix(source,
++				dest, compressedSize, maxOutputSize,
++				lz4sd->prefixSize);
++		else
++			result = LZ4_decompress_safe_doubleDict(source, dest,
++				compressedSize, maxOutputSize,
++				lz4sd->prefixSize,
++				lz4sd->externalDict, lz4sd->extDictSize);
+ 		if (result <= 0)
+ 			return result;
+-
+ 		lz4sd->prefixSize += result;
+-		lz4sd->prefixEnd	+= result;
++		lz4sd->prefixEnd  += result;
+ 	} else {
++		/*
++		 * The buffer wraps around, or they're
++		 * switching to another buffer.
++		 */
+ 		lz4sd->extDictSize = lz4sd->prefixSize;
+ 		lz4sd->externalDict = lz4sd->prefixEnd - lz4sd->extDictSize;
+-		result = LZ4_decompress_generic(source, dest,
++		result = LZ4_decompress_safe_forceExtDict(source, dest,
+ 			compressedSize, maxOutputSize,
+-			endOnInputSize, full, 0,
+-			usingExtDict, (BYTE *)dest,
+ 			lz4sd->externalDict, lz4sd->extDictSize);
+ 		if (result <= 0)
+ 			return result;
+ 		lz4sd->prefixSize = result;
+-		lz4sd->prefixEnd	= (BYTE *)dest + result;
++		lz4sd->prefixEnd  = (BYTE *)dest + result;
+ 	}
+ 
+ 	return result;
+@@ -422,75 +632,66 @@ int LZ4_decompress_fast_continue(LZ4_streamDecode_t *LZ4_streamDecode,
+ 	LZ4_streamDecode_t_internal *lz4sd = &LZ4_streamDecode->internal_donotuse;
+ 	int result;
+ 
+-	if (lz4sd->prefixEnd == (BYTE *)dest) {
+-		result = LZ4_decompress_generic(source, dest, 0, originalSize,
+-			endOnOutputSize, full, 0,
+-			usingExtDict,
+-			lz4sd->prefixEnd - lz4sd->prefixSize,
+-			lz4sd->externalDict, lz4sd->extDictSize);
+-
++	if (lz4sd->prefixSize == 0) {
++		assert(lz4sd->extDictSize == 0);
++		result = LZ4_decompress_fast(source, dest, originalSize);
++		if (result <= 0)
++			return result;
++		lz4sd->prefixSize = originalSize;
++		lz4sd->prefixEnd = (BYTE *)dest + originalSize;
++	} else if (lz4sd->prefixEnd == (BYTE *)dest) {
++		if (lz4sd->prefixSize >= 64 * KB - 1 ||
++		    lz4sd->extDictSize == 0)
++			result = LZ4_decompress_fast(source, dest,
++						     originalSize);
++		else
++			result = LZ4_decompress_fast_doubleDict(source, dest,
++				originalSize, lz4sd->prefixSize,
++				lz4sd->externalDict, lz4sd->extDictSize);
+ 		if (result <= 0)
+ 			return result;
+-
+ 		lz4sd->prefixSize += originalSize;
+-		lz4sd->prefixEnd	+= originalSize;
++		lz4sd->prefixEnd  += originalSize;
+ 	} else {
+ 		lz4sd->extDictSize = lz4sd->prefixSize;
+ 		lz4sd->externalDict = lz4sd->prefixEnd - lz4sd->extDictSize;
+-		result = LZ4_decompress_generic(source, dest, 0, originalSize,
+-			endOnOutputSize, full, 0,
+-			usingExtDict, (BYTE *)dest,
+-			lz4sd->externalDict, lz4sd->extDictSize);
++		result = LZ4_decompress_fast_extDict(source, dest,
++			originalSize, lz4sd->externalDict, lz4sd->extDictSize);
+ 		if (result <= 0)
+ 			return result;
+ 		lz4sd->prefixSize = originalSize;
+-		lz4sd->prefixEnd	= (BYTE *)dest + originalSize;
++		lz4sd->prefixEnd = (BYTE *)dest + originalSize;
+ 	}
+-
+ 	return result;
+ }
+ 
+-/*
+- * Advanced decoding functions :
+- * *_usingDict() :
+- * These decoding functions work the same as "_continue" ones,
+- * the dictionary must be explicitly provided within parameters
+- */
+-static FORCE_INLINE int LZ4_decompress_usingDict_generic(const char *source,
+-	char *dest, int compressedSize, int maxOutputSize, int safe,
+-	const char *dictStart, int dictSize)
++int LZ4_decompress_safe_usingDict(const char *source, char *dest,
++				  int compressedSize, int maxOutputSize,
++				  const char *dictStart, int dictSize)
+ {
+ 	if (dictSize == 0)
+-		return LZ4_decompress_generic(source, dest,
+-			compressedSize, maxOutputSize, safe, full, 0,
+-			noDict, (BYTE *)dest, NULL, 0);
+-	if (dictStart + dictSize == dest) {
+-		if (dictSize >= (int)(64 * KB - 1))
+-			return LZ4_decompress_generic(source, dest,
+-				compressedSize, maxOutputSize, safe, full, 0,
+-				withPrefix64k, (BYTE *)dest - 64 * KB, NULL, 0);
+-		return LZ4_decompress_generic(source, dest, compressedSize,
+-			maxOutputSize, safe, full, 0, noDict,
+-			(BYTE *)dest - dictSize, NULL, 0);
++		return LZ4_decompress_safe(source, dest,
++					   compressedSize, maxOutputSize);
++	if (dictStart+dictSize == dest) {
++		if (dictSize >= 64 * KB - 1)
++			return LZ4_decompress_safe_withPrefix64k(source, dest,
++				compressedSize, maxOutputSize);
++		return LZ4_decompress_safe_withSmallPrefix(source, dest,
++			compressedSize, maxOutputSize, dictSize);
+ 	}
+-	return LZ4_decompress_generic(source, dest, compressedSize,
+-		maxOutputSize, safe, full, 0, usingExtDict,
+-		(BYTE *)dest, (const BYTE *)dictStart, dictSize);
+-}
+-
+-int LZ4_decompress_safe_usingDict(const char *source, char *dest,
+-	int compressedSize, int maxOutputSize,
+-	const char *dictStart, int dictSize)
+-{
+-	return LZ4_decompress_usingDict_generic(source, dest,
+-		compressedSize, maxOutputSize, 1, dictStart, dictSize);
++	return LZ4_decompress_safe_forceExtDict(source, dest,
++		compressedSize, maxOutputSize, dictStart, dictSize);
+ }
+ 
+ int LZ4_decompress_fast_usingDict(const char *source, char *dest,
+-	int originalSize, const char *dictStart, int dictSize)
++				  int originalSize,
++				  const char *dictStart, int dictSize)
+ {
+-	return LZ4_decompress_usingDict_generic(source, dest, 0,
+-		originalSize, 0, dictStart, dictSize);
++	if (dictSize == 0 || dictStart + dictSize == dest)
++		return LZ4_decompress_fast(source, dest, originalSize);
++
++	return LZ4_decompress_fast_extDict(source, dest, originalSize,
++		dictStart, dictSize);
+ }
+ 
+ #ifndef STATIC
+diff --git a/lib/lz4/lz4defs.h b/lib/lz4/lz4defs.h
+index 00a0b58a0..1a7fa9d91 100644
+--- a/lib/lz4/lz4defs.h
++++ b/lib/lz4/lz4defs.h
+@@ -75,6 +75,11 @@ typedef uintptr_t uptrval;
+ #define WILDCOPYLENGTH 8
+ #define LASTLITERALS 5
+ #define MFLIMIT (WILDCOPYLENGTH + MINMATCH)
++/*
++ * ensure it's possible to write 2 x wildcopyLength
++ * without overflowing output buffer
++ */
++#define MATCH_SAFEGUARD_DISTANCE  ((2 * WILDCOPYLENGTH) - MINMATCH)
+ 
+ /* Increase this value ==> compression run slower on incompressible data */
+ #define LZ4_SKIPTRIGGER 6
+@@ -222,6 +227,8 @@ typedef enum { noDict = 0, withPrefix64k, usingExtDict } dict_directive;
+ typedef enum { noDictIssue = 0, dictSmall } dictIssue_directive;
+ 
+ typedef enum { endOnOutputSize = 0, endOnInputSize = 1 } endCondition_directive;
+-typedef enum { full = 0, partial = 1 } earlyEnd_directive;
++typedef enum { decode_full_block = 0, partial_decode = 1 } earlyEnd_directive;
++
++#define LZ4_STATIC_ASSERT(c)	BUILD_BUG_ON(!(c))
+ 
+ #endif

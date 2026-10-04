@@ -1,5 +1,5 @@
 diff --git a/drivers/input/touchscreen/mediatek/NT36672/nt36672.c b/drivers/input/touchscreen/mediatek/NT36672/nt36672.c
-index 85f472d56..02a2cc375 100644
+index d1a51be7f..48b1ef15e 100644
 --- a/drivers/input/touchscreen/mediatek/NT36672/nt36672.c
 +++ b/drivers/input/touchscreen/mediatek/NT36672/nt36672.c
 @@ -22,6 +22,7 @@
@@ -152,7 +152,7 @@ index 85f472d56..02a2cc375 100644
  #if NVT_LOCKDOWN
  	ret = nvt_proc_tp_lockdown_info();
  	if (ret != 0) {
-@@ -1882,6 +2004,8 @@ static int32_t nvt_ts_probe(struct spi_device *client)
+@@ -1881,6 +2003,8 @@ static int32_t nvt_ts_probe(struct spi_device *client)
  nvt_mp_proc_deinit();
  err_mp_proc_init_failed:
  #endif
@@ -161,7 +161,7 @@ index 85f472d56..02a2cc375 100644
  #if NVT_TOUCH_EXT_PROC
  nvt_extra_proc_deinit();
  err_extra_proc_init_failed:
-@@ -1975,6 +2099,7 @@ static int32_t nvt_ts_remove(struct spi_device *client)
+@@ -1974,6 +2098,7 @@ static int32_t nvt_ts_remove(struct spi_device *client)
  #if NVT_TOUCH_MP
  	nvt_mp_proc_deinit();
  #endif
@@ -169,7 +169,7 @@ index 85f472d56..02a2cc375 100644
  #if NVT_TOUCH_EXT_PROC
  	nvt_extra_proc_deinit();
  #endif
-@@ -2051,6 +2176,7 @@ static void nvt_ts_shutdown(struct spi_device *client)
+@@ -2050,6 +2175,7 @@ static void nvt_ts_shutdown(struct spi_device *client)
  #if NVT_TOUCH_MP
  	nvt_mp_proc_deinit();
  #endif
@@ -177,7 +177,7 @@ index 85f472d56..02a2cc375 100644
  #if NVT_TOUCH_EXT_PROC
  	nvt_extra_proc_deinit();
  #endif
-@@ -2217,7 +2343,8 @@ static int32_t nvt_ts_resume(struct device *dev)
+@@ -2216,7 +2342,8 @@ static int32_t nvt_ts_resume(struct device *dev)
  	}
  
  #if !WAKEUP_GESTURE
@@ -201,10 +201,10 @@ index 5006a13be..3352caef7 100644
  
  #define PRINTK_MAX_SINGLE_HEADER_LEN 2
 diff --git a/init/version.c b/init/version.c
-index 19968e3da..398414546 100644
+index 5606341e9..7478d29f2 100644
 --- a/init/version.c
 +++ b/init/version.c
-@@ -14,6 +14,10 @@
+@@ -13,6 +13,10 @@
  #include <generated/utsrelease.h>
  #include <linux/version.h>
  #include <linux/proc_ns.h>
@@ -215,7 +215,7 @@ index 19968e3da..398414546 100644
  
  #ifndef CONFIG_KALLSYMS
  #define version(a) Version_ ## a
-@@ -42,7 +46,7 @@ struct uts_namespace init_uts_ns = {
+@@ -41,7 +45,7 @@ struct uts_namespace init_uts_ns = {
  EXPORT_SYMBOL_GPL(init_uts_ns);
  
  /* FIXED STRINGS! Don't touch! */
@@ -224,10 +224,10 @@ index 19968e3da..398414546 100644
  	"Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
  	LINUX_COMPILE_HOST ") (" LINUX_COMPILER ") " UTS_VERSION "\n";
  
-@@ -52,3 +56,45 @@ const char linux_proc_banner[] =
+@@ -49,3 +53,45 @@ const char linux_proc_banner[] =
+ 	"%s version %s"
+ 	" (" LINUX_COMPILE_BY "@" LINUX_COMPILE_HOST ")"
  	" (" LINUX_COMPILER ") %s\n";
- 
- BUILD_SALT;
 +
 +/* 动态控制逻辑 */
 +static ssize_t fake_version_write(struct file *file, const char __user *buffer,

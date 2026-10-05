@@ -156,12 +156,6 @@ jobs:
             fi
         fi
 
-    - name: Download mkbootimg tools
-      if: env.BUILD_BOOT_IMG == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        git clone https://android.googlesource.com/platform/system/tools/mkbootimg tools -b master-kernel-build-2022 --depth=1
-
     - name: Download kernel source
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
@@ -171,11 +165,15 @@ jobs:
       if: env.BUILD_BOOT_IMG == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
+        chmod +x $GITHUB_WORKSPACE/tools/magiskboot
         wget -nv -O boot.zip ${{ env.SOURCE_BOOT_IMAGE }}
         unzip boot.zip
         mv boot.img boot-source.img
         if [ -f boot-source.img ]; then
-            echo "FORMAT_MKBOOTING=$(echo `tools/unpack_bootimg.py --boot_img=boot-source.img --format mkbootimg`)" >> $GITHUB_ENV
+            mkdir -p boot_unpack
+            cp boot-source.img boot_unpack/
+            cd boot_unpack
+            $GITHUB_WORKSPACE/tools/magiskboot unpack boot-source.img
             echo "HAVE_SOURCE_BOOT_IMAGE=true" >> $GITHUB_ENV
         fi
 
@@ -400,10 +398,16 @@ jobs:
       if: env.HAVE_SOURCE_BOOT_IMAGE == 'true' && env.CHECK_FILE_IS_OK == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
-        tools/unpack_bootimg.py --boot_img boot-source.img
-        cp android-kernel/out/arch/${{ env.KERNEL_ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} out/kernel
-        tools/mkbootimg.py ${{ env.FORMAT_MKBOOTING }} -o boot.img
-        if [ -f boot.img ]; then
+        KERNEL_IMG=$GITHUB_WORKSPACE/kernel_workspace/android-kernel/out/arch/${{ env.KERNEL_ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}
+        cd boot_unpack
+        # Replace the unpacked kernel with the newly built one.
+        # magiskboot unpack decomposes the source boot (kernel / kernel_dtb /
+        # ramdisk.cpio / second / dtb / header); repack reuses the original
+        # header (header_version, os_version, offsets) and preserves the
+        # original AVB layout instead of regenerating a mismatched vbmeta.
+        cp "$KERNEL_IMG" kernel
+        $GITHUB_WORKSPACE/tools/magiskboot repack boot-source.img $GITHUB_WORKSPACE/kernel_workspace/boot.img
+        if [ -f $GITHUB_WORKSPACE/kernel_workspace/boot.img ]; then
             echo "MAKE_BOOT_IMAGE_IS_OK=true" >> $GITHUB_ENV
         else
             echo "Boot image is empty"

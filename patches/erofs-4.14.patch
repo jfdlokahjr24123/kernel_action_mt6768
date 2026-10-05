@@ -2,10 +2,10 @@ diff --git a/arch/arm64/configs/lancelot_defconfig b/arch/arm64/configs/lancelot
 index a45a1ed5a..fb55ca0e3 100644
 --- a/arch/arm64/configs/lancelot_defconfig
 +++ b/arch/arm64/configs/lancelot_defconfig
-@@ -440,3 +440,6 @@ CONFIG_LEDS_TRIGGER_BACKLIGHT=y
- CONFIG_BT=y
- CONFIG_WLAN_DRV_BUILD_IN=y
- # CONFIG_PRINTK_MT_PREFIX is not set
+@@ -445,3 +445,6 @@ CONFIG_MTK_SYSTRACKER_V2=n
+ CONFIG_MTK_SYSTRACKER_DISABLE=y
+ CONFIG_WIREGUARD=y
+ # CONFIG_WIREGUARD_DEBUG is not set
 +CONFIG_EROFS_FS=y
 +CONFIG_EROFS_FS_ZIP=y
 +CONFIG_EROFS_FS_CLUSTER_PAGE_LIMIT=16

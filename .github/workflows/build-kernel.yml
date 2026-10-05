@@ -211,7 +211,7 @@ jobs:
         echo "CONFIG_DM_DEFAULT_KEY=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
         echo "CONFIG_FS_ENCRYPTION=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
         #sed -i 's/# CONFIG_DM_DEFAULT_KEY is not set/CONFIG_DM_DEFAULT_KEY=y/g' arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        sed -i 's/obj-$(CONFIG_VIDEO_MEDIATEK_VCU) += .*/obj-$(CONFIG_VIDEO_MEDIATEK_VCODEC) += mtk-vcu.o/' drivers/media/platform/mtk-vcu/Makefile
+        #sed -i 's/obj-$(CONFIG_VIDEO_MEDIATEK_VCU) += .*/obj-$(CONFIG_VIDEO_MEDIATEK_VCODEC) += mtk-vcu.o/' drivers/media/platform/mtk-vcu/Makefile
 
     - name: Setup Configuration for kernel
       run: |

@@ -1,0 +1,50 @@
+diff --git a/drivers/misc/mediatek/connectivity/wlan/core/gen4m/os/linux/gl_wext_priv.c b/drivers/misc/mediatek/connectivity/wlan/core/gen4m/os/linux/gl_wext_priv.c
+index 9ef16632a..eb5449c88 100644
+--- a/drivers/misc/mediatek/connectivity/wlan/core/gen4m/os/linux/gl_wext_priv.c
++++ b/drivers/misc/mediatek/connectivity/wlan/core/gen4m/os/linux/gl_wext_priv.c
+@@ -3045,6 +3045,8 @@ reqExtSetAcpiDevicePowerState(IN struct GLUE_INFO
+ #define CMD_SET_SW_AMSDU_NUM      "SET_SW_AMSDU_NUM"
+ #define CMD_SET_SW_AMSDU_SIZE      "SET_SW_AMSDU_SIZE"
+ 
++#define CMD_MACADDR               "MACADDR"
++
+ #define CMD_SET_DRV_SER           "SET_DRV_SER"
+ 
+ #define CMD_GET_WFDMA_INFO      "GET_WFDMA_INFO"
+@@ -3149,6 +3151,28 @@ static int priv_cmd_not_support(IN struct net_device *prNetDev,
+ 	return -EOPNOTSUPP;
+ }
+ 
++/* Android wpa_supplicant queries the STA factory MAC via the
++ * "MACADDR" private command and expects a reply of the form
++ * "MACADDR = xx:xx:xx:xx:xx:xx".  MTK gen4m did not implement it,
++ * which makes framework getMacAddress() fail and fall back to a
++ * bogus default.  Provide it here.
++ */
++static int priv_driver_get_macaddr(IN struct net_device *prNetDev,
++	IN char *pcCommand, IN int i4TotalLen)
++{
++	uint8_t *pucMacAddr = NULL;
++
++	if (GLUE_CHK_PR2(prNetDev, pcCommand) == FALSE)
++		return -1;
++
++	pucMacAddr = prNetDev->dev_addr;
++
++	return kalSnprintf(pcCommand, i4TotalLen,
++		"MACADDR = %02x:%02x:%02x:%02x:%02x:%02x",
++		pucMacAddr[0], pucMacAddr[1], pucMacAddr[2],
++		pucMacAddr[3], pucMacAddr[4], pucMacAddr[5]);
++}
++
+ #if CFG_SUPPORT_QA_TOOL
+ #if CFG_SUPPORT_BUFFER_MODE
+ static int priv_driver_set_efuse_buffer_mode(
+@@ -13650,6 +13674,7 @@ struct PRIV_CMD_HANDLER priv_cmd_handlers[] = {
+ 	{CMD_SET_STA1NSS, priv_driver_set_sta1ss},
+ 	{CMD_SET_NVRAM, priv_driver_set_nvram},
+ 	{CMD_GET_NVRAM, priv_driver_get_nvram},
++	{CMD_MACADDR, priv_driver_get_macaddr},
+ };
+ 
+ int32_t priv_driver_cmds(IN struct net_device *prNetDev, IN int8_t *pcCommand,

@@ -1,21 +1,21 @@
 diff --git a/drivers/misc/mediatek/connectivity/wlan/core/gen4m/Makefile b/drivers/misc/mediatek/connectivity/wlan/core/gen4m/Makefile
-index 8d4bbf3ba..369160263 100644
+index 8d4bbf3ba..9e78d259a 100644
 --- a/drivers/misc/mediatek/connectivity/wlan/core/gen4m/Makefile
 +++ b/drivers/misc/mediatek/connectivity/wlan/core/gen4m/Makefile
-@@ -18,6 +18,13 @@ ifeq ($(os), none)
- ccflags-y += -I/usr/include/
- ccflags-y += -DCFG_VIRTUAL_OS
- ccflags-y += -DCFG_REMIND_IMPLEMENT
-+
+@@ -14,6 +14,13 @@ ccflags-y += -Wno-format
+ ccflags-y += -Wno-parentheses
+ ccflags-y += -Wno-error
+ 
 +# Android wpa_supplicant uses the AOSP pointer-based
 +# struct android_wifi_priv_cmd for SIOCDEVPRIVATE+1.
 +# Without this, the driver parses a differently laid-out
 +# struct (priv_driver_cmd_s) and every private command
-+# (incl. MACADDR) fails with -EINVAL.
++# (incl. MACADDR) fails with -EINVAL / unparseable reply.
 +ccflags-y += -DCFG_ANDROID_AOSP_PRIV_CMD
- endif
- 
- ifndef TOP
++
+ ifeq ($(os), none)
+ ccflags-y += -I/usr/include/
+ ccflags-y += -DCFG_VIRTUAL_OS
 diff --git a/drivers/misc/mediatek/connectivity/wlan/core/gen4m/os/linux/gl_wext_priv.c b/drivers/misc/mediatek/connectivity/wlan/core/gen4m/os/linux/gl_wext_priv.c
 index 9ef16632a..90d745105 100644
 --- a/drivers/misc/mediatek/connectivity/wlan/core/gen4m/os/linux/gl_wext_priv.c

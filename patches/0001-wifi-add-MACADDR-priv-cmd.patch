@@ -1,5 +1,5 @@
 diff --git a/drivers/misc/mediatek/connectivity/wlan/core/gen4m/os/linux/gl_wext_priv.c b/drivers/misc/mediatek/connectivity/wlan/core/gen4m/os/linux/gl_wext_priv.c
-index 9ef16632a..eb5449c88 100644
+index 9ef16632a..90d745105 100644
 --- a/drivers/misc/mediatek/connectivity/wlan/core/gen4m/os/linux/gl_wext_priv.c
 +++ b/drivers/misc/mediatek/connectivity/wlan/core/gen4m/os/linux/gl_wext_priv.c
 @@ -3045,6 +3045,8 @@ reqExtSetAcpiDevicePowerState(IN struct GLUE_INFO
@@ -11,7 +11,7 @@ index 9ef16632a..eb5449c88 100644
  #define CMD_SET_DRV_SER           "SET_DRV_SER"
  
  #define CMD_GET_WFDMA_INFO      "GET_WFDMA_INFO"
-@@ -3149,6 +3151,28 @@ static int priv_cmd_not_support(IN struct net_device *prNetDev,
+@@ -3149,6 +3151,39 @@ static int priv_cmd_not_support(IN struct net_device *prNetDev,
  	return -EOPNOTSUPP;
  }
  
@@ -24,12 +24,23 @@ index 9ef16632a..eb5449c88 100644
 +static int priv_driver_get_macaddr(IN struct net_device *prNetDev,
 +	IN char *pcCommand, IN int i4TotalLen)
 +{
++	struct GLUE_INFO *prGlueInfo = NULL;
 +	uint8_t *pucMacAddr = NULL;
++	static const uint8_t aucZeroMac[] = NULL_MAC_ADDR;
 +
 +	if (GLUE_CHK_PR2(prNetDev, pcCommand) == FALSE)
 +		return -1;
 +
-+	pucMacAddr = prNetDev->dev_addr;
++	prGlueInfo = *((struct GLUE_INFO **) netdev_priv(prNetDev));
++	if (prGlueInfo && prGlueInfo->prAdapter) {
++		/* Prefer the permanent (NVRAM/efuse) STA MAC */
++		pucMacAddr = prGlueInfo->prAdapter->rWifiVar.aucPermanentAddress;
++		if (EQUAL_MAC_ADDR(aucZeroMac, pucMacAddr))
++			pucMacAddr =
++				prGlueInfo->prAdapter->rWifiVar.aucMacAddress;
++	}
++	if (!pucMacAddr || EQUAL_MAC_ADDR(aucZeroMac, pucMacAddr))
++		pucMacAddr = prNetDev->dev_addr;
 +
 +	return kalSnprintf(pcCommand, i4TotalLen,
 +		"MACADDR = %02x:%02x:%02x:%02x:%02x:%02x",
@@ -40,7 +51,7 @@ index 9ef16632a..eb5449c88 100644
  #if CFG_SUPPORT_QA_TOOL
  #if CFG_SUPPORT_BUFFER_MODE
  static int priv_driver_set_efuse_buffer_mode(
-@@ -13650,6 +13674,7 @@ struct PRIV_CMD_HANDLER priv_cmd_handlers[] = {
+@@ -13650,6 +13685,7 @@ struct PRIV_CMD_HANDLER priv_cmd_handlers[] = {
  	{CMD_SET_STA1NSS, priv_driver_set_sta1ss},
  	{CMD_SET_NVRAM, priv_driver_set_nvram},
  	{CMD_GET_NVRAM, priv_driver_get_nvram},

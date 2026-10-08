@@ -199,7 +199,7 @@ jobs:
         #fi
         git apply $GITHUB_WORKSPACE/patches/erofs-4.14.patch
         git apply $GITHUB_WORKSPACE/patches/set_version-touch_flag.patch
-        git apply $GITHUB_WORKSPACE/patches/0001-wifi-add-MACADDR-priv-cmd.patch
+        #git apply $GITHUB_WORKSPACE/patches/0001-wifi-add-MACADDR-priv-cmd.patch
         echo "CONFIG_F2FS_FS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
         echo "CONFIG_F2FS_FS_XATTR=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
         echo "CONFIG_F2FS_FS_POSIX_ACL=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig

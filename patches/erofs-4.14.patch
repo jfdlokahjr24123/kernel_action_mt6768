@@ -1,5 +1,5 @@
 diff --git a/arch/arm64/configs/lancelot_defconfig b/arch/arm64/configs/lancelot_defconfig
-index a45a1ed5a..fb55ca0e3 100644
+index 29bdba42a..253efeaf9 100644
 --- a/arch/arm64/configs/lancelot_defconfig
 +++ b/arch/arm64/configs/lancelot_defconfig
 @@ -445,3 +445,6 @@ CONFIG_MTK_SYSTRACKER_V2=n
@@ -22,10 +22,10 @@ index 83d8bf551..a2b8cb0c2 100644
  config FS_DAX
  	bool "Direct Access (DAX) support"
 diff --git a/fs/Makefile b/fs/Makefile
-index e37761012..726907df6 100644
+index ea8825275..4ab547a62 100644
 --- a/fs/Makefile
 +++ b/fs/Makefile
-@@ -135,6 +135,7 @@ obj-$(CONFIG_OCFS2_FS)		+= ocfs2/
+@@ -131,6 +131,7 @@ obj-$(CONFIG_OCFS2_FS)		+= ocfs2/
  obj-$(CONFIG_BTRFS_FS)		+= btrfs/
  obj-$(CONFIG_GFS2_FS)           += gfs2/
  obj-$(CONFIG_F2FS_FS)		+= f2fs/
@@ -149,10 +149,10 @@ index 000000000..46f2aa4ba
 +
 diff --git a/fs/erofs/compress.h b/fs/erofs/compress.h
 new file mode 100644
-index 000000000..b15c3a75d
+index 000000000..07d279fd5
 --- /dev/null
 +++ b/fs/erofs/compress.h
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,60 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +/*
 + * Copyright (C) 2019 HUAWEI, Inc.
@@ -197,12 +197,14 @@ index 000000000..b15c3a75d
 +static inline bool z_erofs_put_stagingpage(struct list_head *pagepool,
 +					   struct page *page)
 +{
-+	(void)pagepool;
 +	if (!z_erofs_page_is_staging(page))
 +		return false;
 +
 +	/* staging pages should not be used by others at the same time */
-+	put_page(page);
++	if (page_ref_count(page) > 1)
++		put_page(page);
++	else
++		list_add(&page->lru, pagepool);
 +	return true;
 +}
 +
@@ -3295,10 +3297,10 @@ index 000000000..a72897c86
 +
 diff --git a/fs/erofs/utils.c b/fs/erofs/utils.c
 new file mode 100644
-index 000000000..bda22b1cb
+index 000000000..e531db44a
 --- /dev/null
 +++ b/fs/erofs/utils.c
-@@ -0,0 +1,328 @@
+@@ -0,0 +1,333 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Copyright (C) 2018 HUAWEI, Inc.
@@ -3312,8 +3314,13 @@ index 000000000..bda22b1cb
 +{
 +	struct page *page;
 +
-+	(void)pool;
-+	page = alloc_pages(gfp | (nofail ? __GFP_NOFAIL : 0), 0);
++	if (!list_empty(pool)) {
++		page = lru_to_page(pool);
++		DBG_BUGON(page_ref_count(page) != 1);
++		list_del(&page->lru);
++	} else {
++		page = alloc_pages(gfp | (nofail ? __GFP_NOFAIL : 0), 0);
++	}
 +	return page;
 +}
 +
@@ -4447,10 +4454,10 @@ index 000000000..3585b84d2
 +
 diff --git a/fs/erofs/zdata.c b/fs/erofs/zdata.c
 new file mode 100644
-index 000000000..1e7965539
+index 000000000..7e0547e7b
 --- /dev/null
 +++ b/fs/erofs/zdata.c
-@@ -0,0 +1,1439 @@
+@@ -0,0 +1,1440 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Copyright (C) 2018 HUAWEI, Inc.
@@ -5818,7 +5825,7 @@ index 000000000..1e7965539
 +	return nr <= sbi->max_sync_decompress_pages;
 +}
 +
-+static int __maybe_unused z_erofs_vle_normalaccess_readpages(struct file *filp,
++static int z_erofs_vle_normalaccess_readpages(struct file *filp,
 +					      struct address_space *mapping,
 +					      struct list_head *pages,
 +					      unsigned int nr_pages)
@@ -5888,6 +5895,7 @@ index 000000000..1e7965539
 +
 +const struct address_space_operations z_erofs_vle_normalaccess_aops = {
 +	.readpage = z_erofs_vle_normalaccess_readpage,
++	.readpages = z_erofs_vle_normalaccess_readpages,
 +};
 +
 diff --git a/fs/erofs/zdata.h b/fs/erofs/zdata.h
@@ -7018,7 +7026,7 @@ index de394b150..523a4db40 100644
  
  #endif /* __LINUX_MAGIC_H__ */
 diff --git a/lib/lz4/lz4_decompress.c b/lib/lz4/lz4_decompress.c
-index 141734d25..0c9d3ad17 100644
+index 141734d25..3c30bf193 100644
 --- a/lib/lz4/lz4_decompress.c
 +++ b/lib/lz4/lz4_decompress.c
 @@ -43,30 +43,36 @@
@@ -7158,7 +7166,7 @@ index 141734d25..0c9d3ad17 100644
 +		   && likely((endOnInput ? ip < shortiend : 1) &
 +			     (op <= shortoend))) {
 +			/* Copy the literals */
-+			memcpy(op, ip, endOnInput ? 16 : 8);
++			LZ4_memcpy(op, ip, endOnInput ? 16 : 8);
 +			op += length; ip += length;
 +
 +			/*
@@ -7177,9 +7185,9 @@ index 141734d25..0c9d3ad17 100644
 +			    (offset >= 8) &&
 +			    (dict == withPrefix64k || match >= lowPrefix)) {
 +				/* Copy the match. */
-+				memcpy(op + 0, match + 0, 8);
-+				memcpy(op + 8, match + 8, 8);
-+				memcpy(op + 16, match + 16, 2);
++				LZ4_memcpy(op + 0, match + 0, 8);
++				LZ4_memcpy(op + 8, match + 8, 8);
++				LZ4_memcpy(op + 16, match + 16, 2);
 +				op += length + MINMATCH;
 +				/* Both stages worked, load the next token. */
 +				continue;
@@ -7247,26 +7255,39 @@ index 141734d25..0c9d3ad17 100644
  				}
  				if ((endOnInput)
  					&& (ip + length > iend)) {
-@@ -184,29 +263,43 @@ static FORCE_INLINE int LZ4_decompress_generic(
- 			memcpy(op, ip, length);
+@@ -181,32 +260,54 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 				}
+ 			}
+ 
+-			memcpy(op, ip, length);
++			/*
++			 * supports overlapping memory regions; only matters
++			 * for in-place decompression scenarios
++			 */
++			LZ4_memmove(op, ip, length);
  			ip += length;
  			op += length;
-+
- 			/* Necessarily EOF, due to parsing restrictions */
+-			/* Necessarily EOF, due to parsing restrictions */
 -			break;
-+			if (!partialDecoding || (cpy == oend))
+-		}
+ 
+-		LZ4_wildCopy(op, ip, cpy);
+-		ip += length;
+-		op = cpy;
++			/* Necessarily EOF when !partialDecoding.
++			 * When partialDecoding, it is EOF if we've either
++			 * filled the output buffer or
++			 * can't proceed with reading an offset for following match.
++			 */
++			if (!partialDecoding || (cpy == oend) || (ip >= (iend - 2)))
 +				break;
 +		} else {
 +			/* may overwrite up to WILDCOPYLENGTH beyond cpy */
 +			LZ4_wildCopy(op, ip, cpy);
 +			ip += length;
 +			op = cpy;
- 		}
++		}
  
--		LZ4_wildCopy(op, ip, cpy);
--		ip += length;
--		op = cpy;
--
  		/* get offset */
  		offset = LZ4_readLE16(ip);
  		ip += 2;
@@ -7300,7 +7321,7 @@ index 141734d25..0c9d3ad17 100644
  		if (length == ML_MASK) {
  			unsigned int s;
  
-@@ -221,7 +314,7 @@ static FORCE_INLINE int LZ4_decompress_generic(
+@@ -221,7 +322,7 @@ static FORCE_INLINE int LZ4_decompress_generic(
  
  			if ((safeDecode)
  				&& unlikely(
@@ -7309,7 +7330,7 @@ index 141734d25..0c9d3ad17 100644
  				/* overflow detection */
  				goto _output_error;
  			}
-@@ -229,24 +322,26 @@ static FORCE_INLINE int LZ4_decompress_generic(
+@@ -229,32 +330,33 @@ static FORCE_INLINE int LZ4_decompress_generic(
  
  		length += MINMATCH;
  
@@ -7341,15 +7362,21 @@ index 141734d25..0c9d3ad17 100644
  				 * dictionary and current block
  				 */
  				size_t const copySize = (size_t)(lowPrefix - match);
-@@ -254,7 +349,6 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 				size_t const restSize = length - copySize;
  
- 				memcpy(op, dictEnd - copySize, copySize);
+-				memcpy(op, dictEnd - copySize, copySize);
++				LZ4_memcpy(op, dictEnd - copySize, copySize);
  				op += copySize;
 -
  				if (restSize > (size_t)(op - lowPrefix)) {
  					/* overlap copy */
  					BYTE * const endOfMatch = op + restSize;
-@@ -267,23 +361,44 @@ static FORCE_INLINE int LZ4_decompress_generic(
+@@ -263,27 +365,48 @@ static FORCE_INLINE int LZ4_decompress_generic(
+ 					while (op < endOfMatch)
+ 						*op++ = *copyFrom++;
+ 				} else {
+-					memcpy(op, lowPrefix, restSize);
++					LZ4_memcpy(op, lowPrefix, restSize);
  					op += restSize;
  				}
  			}
@@ -7378,7 +7405,7 @@ index 141734d25..0c9d3ad17 100644
 +				while (op < copyEnd)
 +					*op++ = *match++;
 +			} else {
-+				memcpy(op, match, mlen);
++				LZ4_memcpy(op, match, mlen);
 +			}
 +			op = copyEnd;
 +			if (op == oend)
@@ -7392,14 +7419,15 @@ index 141734d25..0c9d3ad17 100644
  			op[2] = match[2];
  			op[3] = match[3];
 -			match += dec32table[offset];
-+			match += inc32table[offset];
- 			memcpy(op + 4, match, 4);
+-			memcpy(op + 4, match, 4);
 -			match -= dec64;
++			match += inc32table[offset];
++			LZ4_memcpy(op + 4, match, 4);
 +			match -= dec64table[offset];
  		} else {
  			LZ4_copy8(op, match);
  			match += 8;
-@@ -291,7 +406,7 @@ static FORCE_INLINE int LZ4_decompress_generic(
+@@ -291,7 +414,7 @@ static FORCE_INLINE int LZ4_decompress_generic(
  
  		op += 8;
  
@@ -7408,7 +7436,7 @@ index 141734d25..0c9d3ad17 100644
  			BYTE * const oCopyLimit = oend - (WILDCOPYLENGTH - 1);
  
  			if (cpy > oend - LASTLITERALS) {
-@@ -307,60 +422,139 @@ static FORCE_INLINE int LZ4_decompress_generic(
+@@ -307,60 +430,139 @@ static FORCE_INLINE int LZ4_decompress_generic(
  				match += oCopyLimit - op;
  				op = oCopyLimit;
  			}
@@ -7566,7 +7594,7 @@ index 141734d25..0c9d3ad17 100644
  
  	lz4sd->prefixSize = (size_t) dictSize;
  	lz4sd->prefixEnd = (const BYTE *) dictionary + dictSize;
-@@ -382,35 +576,51 @@ int LZ4_setStreamDecode(LZ4_streamDecode_t *LZ4_streamDecode,
+@@ -382,35 +584,51 @@ int LZ4_setStreamDecode(LZ4_streamDecode_t *LZ4_streamDecode,
  int LZ4_decompress_safe_continue(LZ4_streamDecode_t *LZ4_streamDecode,
  	const char *source, char *dest, int compressedSize, int maxOutputSize)
  {
@@ -7634,7 +7662,7 @@ index 141734d25..0c9d3ad17 100644
  	}
  
  	return result;
-@@ -422,75 +632,66 @@ int LZ4_decompress_fast_continue(LZ4_streamDecode_t *LZ4_streamDecode,
+@@ -422,75 +640,66 @@ int LZ4_decompress_fast_continue(LZ4_streamDecode_t *LZ4_streamDecode,
  	LZ4_streamDecode_t_internal *lz4sd = &LZ4_streamDecode->internal_donotuse;
  	int result;
  
@@ -7751,7 +7779,7 @@ index 141734d25..0c9d3ad17 100644
  
  #ifndef STATIC
 diff --git a/lib/lz4/lz4defs.h b/lib/lz4/lz4defs.h
-index 00a0b58a0..1a7fa9d91 100644
+index 00a0b58a0..673bd206a 100644
 --- a/lib/lz4/lz4defs.h
 +++ b/lib/lz4/lz4defs.h
 @@ -75,6 +75,11 @@ typedef uintptr_t uptrval;
@@ -7766,105 +7794,7 @@ index 00a0b58a0..1a7fa9d91 100644
  
  /* Increase this value ==> compression run slower on incompressible data */
  #define LZ4_SKIPTRIGGER 6
-@@ -222,6 +227,8 @@ typedef enum { noDict = 0, withPrefix64k, usingExtDict } dict_directive;
- typedef enum { noDictIssue = 0, dictSmall } dictIssue_directive;
- 
- typedef enum { endOnOutputSize = 0, endOnInputSize = 1 } endCondition_directive;
--typedef enum { full = 0, partial = 1 } earlyEnd_directive;
-+typedef enum { decode_full_block = 0, partial_decode = 1 } earlyEnd_directive;
-+
-+#define LZ4_STATIC_ASSERT(c)	BUILD_BUG_ON(!(c))
- 
- #endif
-diff --git a/lib/lz4/lz4_decompress.c b/lib/lz4/lz4_decompress.c
---- a/lib/lz4/lz4_decompress.c
-+++ b/lib/lz4/lz4_decompress.c
-@@ -150,7 +150,7 @@
- 		   && likely((endOnInput ? ip < shortiend : 1) &
- 			     (op <= shortoend))) {
- 			/* Copy the literals */
--			memcpy(op, ip, endOnInput ? 16 : 8);
-+			LZ4_memcpy(op, ip, endOnInput ? 16 : 8);
- 			op += length; ip += length;
- 
- 			/*
-@@ -169,9 +169,9 @@
- 			    (offset >= 8) &&
- 			    (dict == withPrefix64k || match >= lowPrefix)) {
- 				/* Copy the match. */
--				memcpy(op + 0, match + 0, 8);
--				memcpy(op + 8, match + 8, 8);
--				memcpy(op + 16, match + 16, 2);
-+				LZ4_memcpy(op + 0, match + 0, 8);
-+				LZ4_memcpy(op + 8, match + 8, 8);
-+				LZ4_memcpy(op + 16, match + 16, 2);
- 				op += length + MINMATCH;
- 				/* Both stages worked, load the next token. */
- 				continue;
-@@ -260,12 +260,20 @@
- 				}
- 			}
- 
--			memcpy(op, ip, length);
-+			/*
-+			 * supports overlapping memory regions; only matters
-+			 * for in-place decompression scenarios
-+			 */
-+			LZ4_memmove(op, ip, length);
- 			ip += length;
- 			op += length;
- 
--			/* Necessarily EOF, due to parsing restrictions */
--			if (!partialDecoding || (cpy == oend))
-+			/* Necessarily EOF when !partialDecoding.
-+			 * When partialDecoding, it is EOF if we've either
-+			 * filled the output buffer or
-+			 * can't proceed with reading an offset for following match.
-+			 */
-+			if (!partialDecoding || (cpy == oend) || (ip >= (iend - 2)))
- 				break;
- 		} else {
- 			/* may overwrite up to WILDCOPYLENGTH beyond cpy */
-@@ -347,7 +355,7 @@
- 				size_t const copySize = (size_t)(lowPrefix - match);
- 				size_t const restSize = length - copySize;
- 
--				memcpy(op, dictEnd - copySize, copySize);
-+				LZ4_memcpy(op, dictEnd - copySize, copySize);
- 				op += copySize;
- 				if (restSize > (size_t)(op - lowPrefix)) {
- 					/* overlap copy */
-@@ -357,7 +365,7 @@
- 					while (op < endOfMatch)
- 						*op++ = *copyFrom++;
- 				} else {
--					memcpy(op, lowPrefix, restSize);
-+					LZ4_memcpy(op, lowPrefix, restSize);
- 					op += restSize;
- 				}
- 			}
-@@ -383,7 +391,7 @@
- 				while (op < copyEnd)
- 					*op++ = *match++;
- 			} else {
--				memcpy(op, match, mlen);
-+				LZ4_memcpy(op, match, mlen);
- 			}
- 			op = copyEnd;
- 			if (op == oend)
-@@ -397,7 +405,7 @@
- 			op[2] = match[2];
- 			op[3] = match[3];
- 			match += inc32table[offset];
--			memcpy(op + 4, match, 4);
-+			LZ4_memcpy(op + 4, match, 4);
- 			match -= dec64table[offset];
- 		} else {
- 			LZ4_copy8(op, match);
-diff --git a/lib/lz4/lz4defs.h b/lib/lz4/lz4defs.h
---- a/lib/lz4/lz4defs.h
-+++ b/lib/lz4/lz4defs.h
-@@ -137,6 +137,17 @@
+@@ -132,6 +137,17 @@ static FORCE_INLINE void LZ4_writeLE16(void *memPtr, U16 value)
  	return put_unaligned_le16(value, memPtr);
  }
  
@@ -7882,3 +7812,13 @@ diff --git a/lib/lz4/lz4defs.h b/lib/lz4/lz4defs.h
  static FORCE_INLINE void LZ4_copy8(void *dst, const void *src)
  {
  #if LZ4_ARCH64
+@@ -222,6 +238,8 @@ typedef enum { noDict = 0, withPrefix64k, usingExtDict } dict_directive;
+ typedef enum { noDictIssue = 0, dictSmall } dictIssue_directive;
+ 
+ typedef enum { endOnOutputSize = 0, endOnInputSize = 1 } endCondition_directive;
+-typedef enum { full = 0, partial = 1 } earlyEnd_directive;
++typedef enum { decode_full_block = 0, partial_decode = 1 } earlyEnd_directive;
++
++#define LZ4_STATIC_ASSERT(c)	BUILD_BUG_ON(!(c))
+ 
+ #endif

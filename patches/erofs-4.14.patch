@@ -1776,7 +1776,7 @@ index 000000000..af90d3d70
 +
 diff --git a/fs/erofs/internal.h b/fs/erofs/internal.h
 new file mode 100644
-index 000000000..f66498ba1
+index 000000000..fe84f2e27
 --- /dev/null
 +++ b/fs/erofs/internal.h
 @@ -0,0 +1,506 @@
@@ -1807,7 +1807,7 @@ index 000000000..f66498ba1
 + * compatibility shims for the v5.4 EROFS backport on Linux 4.14
 + */
 +#ifndef lru_to_page
-+#define lru_to_page(entry) list_entry(entry, struct page, lru)
++#define lru_to_page(head) (list_entry((head)->prev, struct page, lru))
 +#endif
 +
 +#ifndef atomic_cond_read_relaxed
